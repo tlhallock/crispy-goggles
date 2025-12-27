@@ -1,0 +1,15 @@
+Can you create a multi workspace project in rust that has some sub projects
+lobby server
+	contains actix crud endpoints for a lobby which only has a list of players and boolean for if they are ready
+common
+	containes an object model of the lobby
+	contains a grpc model of circle and rectangle shapes/filled
+server
+	contains a server that for now just has one endpoint to create a shape
+	the shape is chosen randomly
+	it uses grpc to send to any listening client notifications of the shapes shown/hidden
+ui
+	a leptos web app that shows a canvas with the shapes, and one button to make a shape
+client
+	a rust cli client that also subscribes to the grpc endpoint, and prints events.
+	

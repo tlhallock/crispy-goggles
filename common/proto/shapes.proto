@@ -1,0 +1,92 @@
+syntax = "proto3";
+package shapes;
+
+message Color {
+  uint32 r = 1;
+  uint32 g = 2;
+  uint32 b = 3;
+}
+
+message Circle {
+  float radius = 1;
+}
+
+message Rectangle {
+  float w = 1;
+  float h = 2;
+}
+
+message Shape {
+  oneof kind {
+    Circle circle = 1;
+    Rectangle rectangle = 2;
+  }
+}
+
+message PathSegment {
+  float begin_x = 1;
+  float begin_y = 2;
+  bool has_end_location = 3;
+  float end_x = 4;
+  float end_y = 5;
+
+  uint64 begin_time = 6;
+  bool has_end_time = 7;
+  uint64 end_time = 8;
+
+  float begin_orientation = 9;
+  bool has_end_orientation = 10;
+  float end_orientation = 11;
+}
+
+message Animatable {
+  uint64 id = 1;
+  Shape shape = 2;
+  bool fill = 3;
+  Color color = 4;
+  repeated PathSegment path = 5;
+}
+
+message Begin {
+  uint64 timestamp = 1;
+}
+
+message Show {
+  Animatable anim = 1;
+}
+
+message Update {
+  uint64 id = 1;
+  repeated PathSegment path = 2;
+}
+
+message Hide {
+  uint64 id = 1;
+}
+
+message Synchronize {
+  uint64 wall_time = 1;
+  uint64 game_time = 2;
+//  float64 speed = 3;
+}
+
+message Event {
+  oneof kind {
+    Begin begin = 1;
+    Show show = 2;
+    Update update = 3;
+    Hide hide = 4;
+    Synchronize synchronize = 5;
+  }
+}
+
+message SubscribeRequest {}
+message CreateShapeRequest {}
+message CreateShapeResponse {
+  uint64 id = 1;
+}
+
+service ShapeEvents {
+  rpc Subscribe(SubscribeRequest) returns (stream Event);
+  rpc CreateShape(CreateShapeRequest) returns (CreateShapeResponse);
+}
