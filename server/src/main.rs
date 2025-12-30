@@ -11,8 +11,37 @@ mod svc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // broadcast buffer
     let (tx, _rx) = broadcast::channel::<common::grpc::Event>(1024);
+
+    {
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            use tokio::time::{Duration, interval};
+            let mut ticker = interval(Duration::from_millis(30));
+            loop {
+                ticker.tick().await;
+
+                let wall_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or(Duration::from_secs(0))
+                    .as_millis() as u64;
+
+                // For now: game_time == wall_time (you can change this later)
+                let game_ms = wall_ms;
+
+                let ev = common::grpc::Event {
+                    kind: Some(common::grpc::event::Kind::Synchronize(
+                        common::grpc::Synchronize {
+                            wall_time: wall_ms,
+                            game_time: game_ms,
+                        },
+                    )),
+                };
+
+                let _ = tx.send(ev);
+            }
+        });
+    }
 
     let service = svc::ShapeSvc::new(tx);
 

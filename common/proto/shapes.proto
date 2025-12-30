@@ -1,6 +1,16 @@
 syntax = "proto3";
 package shapes;
 
+message Point {
+  float x = 1;
+  float y = 2;
+}
+
+message Delta {
+  double dx = 1;
+  double dy = 2;
+}
+
 message Color {
   uint32 r = 1;
   uint32 g = 2;
@@ -24,19 +34,14 @@ message Shape {
 }
 
 message PathSegment {
-  float begin_x = 1;
-  float begin_y = 2;
-  bool has_end_location = 3;
-  float end_x = 4;
-  float end_y = 5;
+  uint64 begin_time = 3;
 
-  uint64 begin_time = 6;
-  bool has_end_time = 7;
-  uint64 end_time = 8;
+  Point begin_location = 1;
+  optional Delta delta = 2;
 
-  float begin_orientation = 9;
-  bool has_end_orientation = 10;
-  float end_orientation = 11;
+
+  float begin_orientation = 6;
+  optional float d_orientation = 7;
 }
 
 message Animatable {

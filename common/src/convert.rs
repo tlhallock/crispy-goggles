@@ -13,34 +13,26 @@ impl From<model::Shape> for grpc::Shape {
     }
 }
 
+impl From<model::Point> for grpc::Point {
+    fn from(p: model::Point) -> Self {
+        grpc::Point { x: p.x, y: p.y }
+    }
+}
+
+impl From<model::Delta> for grpc::Delta {
+    fn from(d: model::Delta) -> Self {
+        grpc::Delta { dx: d.dx, dy: d.dy }
+    }
+}
+
 impl From<model::PathSegment> for grpc::PathSegment {
     fn from(p: model::PathSegment) -> Self {
-        let (bx, by) = p.begin_location;
-        let (has_end_location, ex, ey) = match p.end_location {
-            Some((x, y)) => (true, x, y),
-            None => (false, 0.0, 0.0),
-        };
-        let (has_end_time, et) = match p.end_time {
-            Some(t) => (true, t),
-            None => (false, 0),
-        };
-        let (has_end_orientation, eo) = match p.end_orientation {
-            Some(o) => (true, o),
-            None => (false, 0.0),
-        };
-
         grpc::PathSegment {
-            begin_x: bx,
-            begin_y: by,
-            has_end_location,
-            end_x: ex,
-            end_y: ey,
+            begin_location: Some(p.begin_location.into()),
+            delta: p.delta.map(Into::into),
             begin_time: p.begin_time,
-            has_end_time,
-            end_time: et,
             begin_orientation: p.begin_orientation,
-            has_end_orientation,
-            end_orientation: eo,
+            d_orientation: p.d_orientation,
         }
     }
 }
