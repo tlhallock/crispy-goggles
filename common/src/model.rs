@@ -6,6 +6,21 @@ pub type TimeStamp = u64;
 pub type Id = u64;
 pub type Orientation = f32;
 
+pub type ResourceId = u64;
+
+pub enum Task {
+    MoveTo(Point),
+    Transfer(Transfer),
+}
+
+pub struct Transfer {
+    pub resource_id: ResourceId,
+    pub amount: i32,
+
+    pub source_id: Id,
+    pub destination_id: Id,
+}
+
 // todo just do nanoseconds...
 pub const TIME_PER_SECOND: u64 = 1_000;
 
@@ -27,27 +42,13 @@ pub struct Delta {
     pub dy: f64,
 }
 
-impl Delta {
-    pub fn normalize(&self, radius: f64) -> Delta {
-        // todo: can use the radius to scale differently...
-        let len = (self.dx * self.dx + self.dy * self.dy).sqrt();
-        if len < 1e-6 {
-            Delta { dx: 0.0, dy: 0.0 }
-        } else {
-            Delta {
-                dx: self.dx / len * radius,
-                dy: self.dy / len * radius,
-            }
-        }
-    }
-}
-
 // TODO...
 pub struct OrientedPoint {
     pub point: Point,
     pub orientation: Orientation,
 }
 
+// this should be any task
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PathSegment {
     pub begin_time: TimeStamp,
@@ -75,6 +76,21 @@ pub enum Message {
     Show(Animatable),
     Update(Id, Vec<PathSegment>),
     Hide(Id),
+}
+
+impl Delta {
+    pub fn normalize(&self, radius: f64) -> Delta {
+        // todo: can use the radius to scale differently...
+        let len = (self.dx * self.dx + self.dy * self.dy).sqrt();
+        if len < 1e-6 {
+            Delta { dx: 0.0, dy: 0.0 }
+        } else {
+            Delta {
+                dx: self.dx / len * radius,
+                dy: self.dy / len * radius,
+            }
+        }
+    }
 }
 
 // impl Delta {
