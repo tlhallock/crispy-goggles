@@ -1,5 +1,4 @@
-use common::model::{Animatable, Message, Shape};
-use common::model::{Coord, TIME_PER_SECOND, TimeStamp};
+use common::model::TimeStamp;
 
 pub struct GameState {
     pub next_id: u64,

@@ -1,16 +1,9 @@
 use crate::state::GameState;
 
-use anyhow::Result;
-use common::grpc::shape_events_server::ShapeEventsServer;
-use http::header::{HeaderName, HeaderValue};
-use std::net::SocketAddr;
 
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, interval};
-use tonic::transport::Server;
-use tonic_web::GrpcWebLayer;
-use tower_http::cors::{AllowOrigin, CorsLayer};
 
 // pub fn simulate_tick(
 //     game_state: &Arc<GameState>,
@@ -36,9 +29,9 @@ use tower_http::cors::{AllowOrigin, CorsLayer};
 // }
 
 async fn tick(
-    user_requests_receiver: &mut mpsc::Receiver<crate::event::PlayerRequest>,
+    _user_requests_receiver: &mut mpsc::Receiver<crate::event::PlayerRequest>,
     tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
-    game_state: &mut GameState,
+    _game_state: &mut GameState,
     // wall_ns?
     wall_ms: u64,
 ) {

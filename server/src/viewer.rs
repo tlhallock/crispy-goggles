@@ -1,12 +1,7 @@
 use crate::event::PublishEvent;
 use common::model::PlayerId;
 
-use tonic::{Request, Response, Status};
 
-use common::grpc::{
-    CreateShapeRequest, CreateShapeResponse, Event, SubscribeRequest,
-    shape_events_server::ShapeEvents,
-};
 
 pub struct GameViewer {
     player_id: PlayerId,

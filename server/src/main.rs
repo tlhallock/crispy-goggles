@@ -1,12 +1,10 @@
 use anyhow::Result;
 use common::grpc::shape_events_server::ShapeEventsServer;
-use http::header::{HeaderName, HeaderValue};
+use http::header::HeaderName;
 use std::net::SocketAddr;
 
-use std::sync::Arc;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
-use tokio::time::{Duration, interval};
 use tonic::transport::Server;
 use tonic_web::GrpcWebLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};

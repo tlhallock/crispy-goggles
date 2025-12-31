@@ -1,11 +1,8 @@
 use crate::viewer::GameViewer;
-use actix_web::cookie::time::Time;
-use common::grpc::PathSegment;
 use common::grpc::{
     CreateShapeRequest, CreateShapeResponse, Event, SubscribeRequest,
     shape_events_server::ShapeEvents,
 };
-use common::lobby::Player;
 use common::model::{self, PlayerId};
 use common::model::{Animatable, Message, Shape};
 use common::model::{Coord, TIME_PER_SECOND, TimeStamp};
@@ -157,12 +154,12 @@ impl ShapeEvents for ShapeSvc {
         &self,
         _req: Request<CreateShapeRequest>,
     ) -> Result<Response<CreateShapeResponse>, Status> {
-        let anim = self.make_random_anim();
+        let _anim = self.make_random_anim();
         let anim = self.create_unit();
         let id = anim.id;
 
         // Broadcast "Show" event to all subscribers
-        let ev: Event = Message::Show(anim).into();
+        let _ev: Event = Message::Show(anim).into();
         // let _ = self.tx.send(ev);
 
         Ok(Response::new(CreateShapeResponse { id }))

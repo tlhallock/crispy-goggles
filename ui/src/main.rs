@@ -1,14 +1,13 @@
 use common::grpc::shape_events_client::ShapeEventsClient;
 use common::grpc::{CreateShapeRequest, Event, SubscribeRequest};
 
-use common::model::{Coord, OrientedPoint, TIME_PER_SECOND, TimeStamp};
+use common::model::{Coord, OrientedPoint, TIME_PER_SECOND};
 use futures::StreamExt;
 use leptos::mount::mount_to_body;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::error::Error as StdError;
 use std::rc::Rc;
 use tonic::Request;
 use tonic_web_wasm_client::Client;
