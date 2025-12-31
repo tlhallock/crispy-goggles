@@ -93,11 +93,20 @@ impl ZoomState {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+struct DrawingRect {
+    start_x: f64,   // in meters
+    start_y: f64,   // in meters
+    current_x: f64, // in meters
+    current_y: f64, // in meters
+}
+
 #[derive(Default)]
 struct UiState {
     sync: Option<TimeSync>,
     anims: HashMap<u64, common::grpc::Animatable>,
     zoom: ZoomState,
+    drawing_rect: Option<DrawingRect>,
 }
 
 fn window() -> Window {
@@ -242,13 +251,6 @@ fn place_for(
     // }
     // Could check if it is the first, always...
 
-    web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(&format!(
-        "place_for: t_game = {}, first.begin_time = {}, index = {:?}, time diff = {}",
-        t_game,
-        first.begin_time,
-        path.binary_search_by_key(&t_game, |seg| seg.begin_time),
-        t_game.saturating_sub(first.begin_time)
-    )));
     match path.binary_search_by_key(&t_game, |seg| seg.begin_time) {
         Ok(idx) => eval_segment(&path[idx], t_game),
         Err(0) => first
@@ -273,10 +275,11 @@ fn eval_segment(
         .begin_location
         .ok_or_else(|| RenderError::MissingStartTime)?;
     let d_t = t_game.saturating_sub(seg.begin_time) as f64;
-    println!(
-        "eval_segment: d_t = {}, location = {:?}, delta = {:?}",
-        d_t, begin_location, seg.delta
-    );
+
+    web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(&format!(
+        "location = {:?}, delta = {:?}, d_t = {}",
+        begin_location, seg.delta, d_t
+    )));
 
     // Assuming delta.dx and delta.dy are in meters per second
     Ok(OrientedPoint {
@@ -346,6 +349,30 @@ fn draw_anim(
     Ok(())
 }
 
+fn draw_rectangle_overlay(
+    ctx: &CanvasRenderingContext2d,
+    canvas: &HtmlCanvasElement,
+    rect: &DrawingRect,
+    zoom: &ZoomState,
+) {
+    // Convert both points from meters to pixels
+    let (x1, y1) = zoom.map_to_pixel((rect.start_x, rect.start_y), canvas);
+    let (x2, y2) = zoom.map_to_pixel((rect.current_x, rect.current_y), canvas);
+
+    let x = x1.min(x2);
+    let y = y1.min(y2);
+    let w = (x1 - x2).abs();
+    let h = (y1 - y2).abs();
+
+    // Draw semi-transparent rectangle
+    ctx.set_stroke_style(&wasm_bindgen::JsValue::from_str("rgba(255, 0, 0, 0.8)"));
+    ctx.set_fill_style(&wasm_bindgen::JsValue::from_str("rgba(255, 0, 0, 0.2)"));
+    ctx.set_line_width(2.0);
+    ctx.stroke_rect(x, y, w, h);
+    ctx.fill_rect(x, y, w, h);
+    ctx.set_line_width(1.0);
+}
+
 fn apply_event(state: &mut UiState, ev: &Event) {
     let Some(kind) = &ev.kind else {
         return;
@@ -385,6 +412,14 @@ fn start_animation_loop(
     let g = f.clone();
 
     *g.borrow_mut() = Some(Closure::wrap(Box::new(move |_ts: f64| {
+        // Resize canvas to match display size to prevent distortion
+        let display_width = canvas.offset_width() as u32;
+        let display_height = canvas.offset_height() as u32;
+        if canvas.width() != display_width || canvas.height() != display_height {
+            canvas.set_width(display_width);
+            canvas.set_height(display_height);
+        }
+
         // Compute current game time
 
         let t_game = {
@@ -412,6 +447,11 @@ fn start_animation_loop(
                     )));
                 }
             }
+
+            // Draw rectangle overlay if currently drawing
+            if let Some(rect) = &st.drawing_rect {
+                draw_rectangle_overlay(&ctx, &canvas, rect, &st.zoom);
+            }
         }
 
         // schedule next frame
@@ -436,6 +476,8 @@ async fn grpc_client() -> ShapeEventsClient<Client> {
 #[component]
 fn App() -> impl IntoView {
     let (status, set_status) = signal::<String>("Starting…".to_string());
+    let (bounds_display, set_bounds_display) = signal::<String>("".to_string());
+    let (bounds_update_trigger, set_bounds_update_trigger) = signal(0u32);
 
     // Non-reactive shared state (fast updates; avoids rerendering on every event/frame)
     let shared = Rc::new(RefCell::new(UiState::default()));
@@ -443,6 +485,35 @@ fn App() -> impl IntoView {
     // Track mouse dragging state
     let (is_dragging, set_is_dragging) = signal(false);
     let (last_mouse_pos, set_last_mouse_pos) = signal::<Option<(f64, f64)>>(None);
+    let (is_drawing_rect, set_is_drawing_rect) = signal(false);
+
+    // Update bounds display when trigger changes
+    {
+        let shared_for_bounds = shared.clone();
+        Effect::new(move |_| {
+            // React to the trigger
+            let _ = bounds_update_trigger.get();
+
+            let canvas = get_canvas("canvas");
+            let state = shared_for_bounds.borrow();
+            let width = canvas.width() as f64;
+            let height = canvas.height() as f64;
+
+            let top_left = state.zoom.pixel_to_map((0.0, 0.0), &canvas);
+            let bottom_right = state.zoom.pixel_to_map((width, height), &canvas);
+
+            let bounds_text = format!(
+                "View: X: {:.2}m to {:.2}m, Y: {:.2}m to {:.2}m ({}x{} m)",
+                top_left.0,
+                bottom_right.0,
+                top_left.1,
+                bottom_right.1,
+                (bottom_right.0 - top_left.0).abs() as i32,
+                (bottom_right.1 - top_left.1).abs() as i32
+            );
+            set_bounds_display.set(bounds_text);
+        });
+    }
 
     {
         let shared_for_effect = shared.clone();
@@ -511,48 +582,106 @@ fn App() -> impl IntoView {
 
     // Mouse event handlers for pan and zoom
     let shared_for_mouse = shared.clone();
+    let shared_for_mouse_down = shared_for_mouse.clone();
     let on_mouse_down = move |ev: web_sys::MouseEvent| {
-        set_is_dragging.set(true);
-        // Use offset coordinates which are relative to the element
-        set_last_mouse_pos.set(Some((ev.offset_x() as f64, ev.offset_y() as f64)));
+        if ev.button() == 0 {
+            // Left button - pan
+            set_is_dragging.set(true);
+            set_last_mouse_pos.set(Some((ev.offset_x() as f64, ev.offset_y() as f64)));
+        } else if ev.button() == 2 {
+            // Right button - start drawing rectangle
+            ev.prevent_default();
+            set_is_drawing_rect.set(true);
+
+            let canvas = get_canvas("canvas");
+            let scale_x = canvas.width() as f64 / canvas.offset_width() as f64;
+            let scale_y = canvas.height() as f64 / canvas.offset_height() as f64;
+
+            let mouse_x = ev.offset_x() as f64 * scale_x;
+            let mouse_y = ev.offset_y() as f64 * scale_y;
+
+            let mut state = shared_for_mouse_down.borrow_mut();
+            let (start_x, start_y) = state.zoom.pixel_to_map((mouse_x, mouse_y), &canvas);
+
+            state.drawing_rect = Some(DrawingRect {
+                start_x,
+                start_y,
+                current_x: start_x,
+                current_y: start_y,
+            });
+        }
     };
 
     let shared_for_mouse_move = shared_for_mouse.clone();
     let on_mouse_move = move |ev: web_sys::MouseEvent| {
-        if !is_dragging.get() {
-            return;
-        }
+        let canvas = get_canvas("canvas");
+        let scale_x = canvas.width() as f64 / canvas.offset_width() as f64;
+        let scale_y = canvas.height() as f64 / canvas.offset_height() as f64;
 
-        if let Some((last_x, last_y)) = last_mouse_pos.get() {
-            let current_x = ev.offset_x() as f64;
-            let current_y = ev.offset_y() as f64;
+        if is_dragging.get() {
+            // Handle panning
+            if let Some((last_x, last_y)) = last_mouse_pos.get() {
+                let current_x = ev.offset_x() as f64;
+                let current_y = ev.offset_y() as f64;
 
-            let canvas = get_canvas("canvas");
+                let dx_pixels = (current_x - last_x) * scale_x;
+                let dy_pixels = (current_y - last_y) * scale_y;
 
-            // Scale from CSS pixels to canvas pixels
-            let scale_x = canvas.width() as f64 / canvas.offset_width() as f64;
-            let scale_y = canvas.height() as f64 / canvas.offset_height() as f64;
+                let mut state = shared_for_mouse_move.borrow_mut();
 
-            let dx_pixels = (current_x - last_x) * scale_x;
-            let dy_pixels = (current_y - last_y) * scale_y;
+                // Convert pixel delta to meters
+                let dx_meters = dx_pixels / state.zoom.pixels_per_meter;
+                let dy_meters = dy_pixels / state.zoom.pixels_per_meter;
+
+                // Move the center (opposite direction of drag)
+                state.zoom.center_x -= dx_meters;
+                state.zoom.center_y -= dy_meters;
+
+                set_last_mouse_pos.set(Some((current_x, current_y)));
+                drop(state); // Release borrow before triggering update
+                set_bounds_update_trigger.update(|v| *v += 1);
+            }
+        } else if is_drawing_rect.get() {
+            // Handle rectangle drawing
+            let mouse_x = ev.offset_x() as f64 * scale_x;
+            let mouse_y = ev.offset_y() as f64 * scale_y;
 
             let mut state = shared_for_mouse_move.borrow_mut();
+            let (current_x, current_y) = state.zoom.pixel_to_map((mouse_x, mouse_y), &canvas);
 
-            // Convert pixel delta to meters
-            let dx_meters = dx_pixels / state.zoom.pixels_per_meter;
-            let dy_meters = dy_pixels / state.zoom.pixels_per_meter;
-
-            // Move the center (opposite direction of drag)
-            state.zoom.center_x -= dx_meters;
-            state.zoom.center_y -= dy_meters;
-
-            set_last_mouse_pos.set(Some((current_x, current_y)));
+            if let Some(rect) = &mut state.drawing_rect {
+                rect.current_x = current_x;
+                rect.current_y = current_y;
+            }
         }
     };
 
-    let on_mouse_up = move |_ev: web_sys::MouseEvent| {
-        set_is_dragging.set(false);
-        set_last_mouse_pos.set(None);
+    let shared_for_mouse_up = shared_for_mouse.clone();
+    let on_mouse_up = move |ev: web_sys::MouseEvent| {
+        if ev.button() == 0 {
+            set_is_dragging.set(false);
+            set_last_mouse_pos.set(None);
+        } else if ev.button() == 2 && is_drawing_rect.get() {
+            // Finish drawing rectangle
+            set_is_drawing_rect.set(false);
+
+            let mut state = shared_for_mouse_up.borrow_mut();
+            if let Some(rect) = state.drawing_rect.take() {
+                let min_x = rect.start_x.min(rect.current_x);
+                let max_x = rect.start_x.max(rect.current_x);
+                let min_y = rect.start_y.min(rect.current_y);
+                let max_y = rect.start_y.max(rect.current_y);
+                let width = max_x - min_x;
+                let height = max_y - min_y;
+                let center_x = (min_x + max_x) / 2.0;
+                let center_y = (min_y + max_y) / 2.0;
+
+                web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(&format!(
+                    "Rectangle drawn - Center: ({:.2}m, {:.2}m), Width: {:.2}m, Height: {:.2}m, Bounds: X[{:.2}, {:.2}], Y[{:.2}, {:.2}]",
+                    center_x, center_y, width, height, min_x, max_x, min_y, max_y
+                )));
+            }
+        }
     };
 
     let shared_for_wheel = shared_for_mouse.clone();
@@ -589,6 +718,9 @@ fn App() -> impl IntoView {
         // Adjust center to keep the point under the mouse the same
         state.zoom.center_x += point_before.0 - point_after.0;
         state.zoom.center_y += point_before.1 - point_after.1;
+
+        drop(state); // Release borrow before triggering update
+        set_bounds_update_trigger.update(|v| *v += 1);
     };
 
     view! {
@@ -598,7 +730,10 @@ fn App() -> impl IntoView {
                 "Make a shape"
             </button>
             <span style="margin-left: 12px;">{move || status.get()}</span>
-            <div style="margin-top: 12px;">
+            <div style="margin-top: 8px; font-family: monospace; font-size: 12px; color: #666;">
+                {move || bounds_display.get()}
+            </div>
+            <div style="margin-top: 8px;">
                 <canvas
                     id="canvas"
                     width="900"
@@ -609,9 +744,10 @@ fn App() -> impl IntoView {
                     )
                     on:mousedown=on_mouse_down
                     on:mousemove=on_mouse_move
-                    on:mouseup=on_mouse_up
+                    on:mouseup=on_mouse_up.clone()
                     on:mouseleave=on_mouse_up
                     on:wheel=on_wheel
+                    on:contextmenu=move |ev: web_sys::MouseEvent| ev.prevent_default()
                 ></canvas>
             </div>
         </div>

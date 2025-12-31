@@ -23,7 +23,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Subscribed. Waiting for events...");
     while let Some(ev) = stream.message().await? {
-        println!("{ev:?}");
+        if matches!(ev.kind, Some(common::grpc::event::Kind::Synchronize(_))) {
+            // skip logging synchronize events
+        } else {
+            println!("{ev:?}");
+        }
     }
 
     Ok(())

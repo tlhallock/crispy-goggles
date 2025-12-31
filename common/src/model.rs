@@ -7,6 +7,13 @@ pub type Id = u64;
 pub type Orientation = f32;
 
 pub type ResourceId = u64;
+pub type PlayerId = u64;
+
+pub const METERS: Coord = 1_000 as Coord;
+pub const SECONDS: TimeStamp = 1_000_000 as TimeStamp;
+
+// todo just do nanoseconds...
+pub const TIME_PER_SECOND: u64 = 1_000;
 
 pub enum Task {
     MoveTo(Point),
@@ -20,9 +27,6 @@ pub struct Transfer {
     pub source_id: Id,
     pub destination_id: Id,
 }
-
-// todo just do nanoseconds...
-pub const TIME_PER_SECOND: u64 = 1_000;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum Shape {

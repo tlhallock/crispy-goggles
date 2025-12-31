@@ -91,7 +91,43 @@ message CreateShapeResponse {
   uint64 id = 1;
 }
 
+
+message ClearQueueRequest {
+  uint64 id = 1;
+}
+message ClearQueueResponse {}
+
+
+message MoveTo {
+  Point destination = 1;
+}
+
+message Transfer {
+  uint64 resource_id = 1;
+}
+
+message Task {
+  oneof kind {
+    MoveTo move = 1;
+    Transfer transfer = 2;
+  }
+}
+
+
+message QueueRequest {
+  uint64 id = 1;
+  repeated Task task = 2;
+}
+
+message QueueResponse {
+  bool valid = 1;
+}
+
+
 service ShapeEvents {
   rpc Subscribe(SubscribeRequest) returns (stream Event);
   rpc CreateShape(CreateShapeRequest) returns (CreateShapeResponse);
+  rpc Queue(QueueRequest) returns (QueueResponse);
+  rpc ClearQueue(ClearQueueRequest) returns (ClearQueueResponse);
+
 }
