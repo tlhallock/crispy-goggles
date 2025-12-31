@@ -20,3 +20,4 @@ tonic = { version = "0.14.2", features = ["transport"] }
 tonic-web = "0.14.2"
 tower-http = { version = "0.6.8", features = ["cors"] }
 http = "1.4.0"
+# single_value_channel = "1.2.2"

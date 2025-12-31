@@ -1,18 +1,19 @@
 use crate::event::PublishEvent;
 use common::model::PlayerId;
 
-
-
 pub struct GameViewer {
     player_id: PlayerId,
-    grpc_tx: tokio::sync::mpsc::Sender<Result<common::grpc::Event, tonic::Status>>,
+    grpc_tx:
+        tokio::sync::mpsc::Sender<Result<common::grpc::Event, tonic::Status>>,
     rx: tokio::sync::broadcast::Receiver<PublishEvent>,
 }
 
 impl GameViewer {
     pub fn new(
         player_id: PlayerId,
-        grpc_tx: tokio::sync::mpsc::Sender<Result<common::grpc::Event, tonic::Status>>,
+        grpc_tx: tokio::sync::mpsc::Sender<
+            Result<common::grpc::Event, tonic::Status>,
+        >,
         rx: tokio::sync::broadcast::Receiver<PublishEvent>,
     ) -> Self {
         Self {
@@ -36,7 +37,24 @@ impl GameViewer {
                             )),
                         }))
                         .await
-                        .map_err(|_e| tonic::Status::internal("failed to send event"))?;
+                        .map_err(|_e| {
+                            tonic::Status::internal("failed to send event")
+                        })?;
+                }
+                PublishEvent::UnitCreated(anim) => {
+                    // let ev = common::grpc::Show(anim).into();
+                    self.grpc_tx
+                        .send(Ok(common::grpc::Event {
+                            kind: Some(common::grpc::event::Kind::Show(
+                                common::grpc::Show {
+                                    anim: Some(anim.into()),
+                                },
+                            )),
+                        }))
+                        .await
+                        .map_err(|_e| {
+                            tonic::Status::internal("failed to send event")
+                        })?;
                 }
             }
         }

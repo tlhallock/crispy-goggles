@@ -5,6 +5,7 @@ pub type Coord = f32;
 pub type TimeStamp = u64;
 pub type Id = u64;
 pub type Orientation = f32;
+pub type UnitId = u64;
 
 pub type ResourceId = u64;
 pub type PlayerId = u64;
