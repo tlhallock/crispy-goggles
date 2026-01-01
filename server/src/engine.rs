@@ -1,3 +1,4 @@
+use crate::event::WarningContent;
 use crate::state::GameState;
 
 // use single_value_channel::channel_starting_with;
@@ -5,20 +6,30 @@ use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, interval};
 
-use crate::viewer::GameViewer;
-use common::grpc::{
-	CreateShapeRequest, CreateShapeResponse, Event, SubscribeRequest,
-	shape_events_server::ShapeEvents,
-};
-use common::model::{self, PlayerId};
-use common::model::{Animatable, Message, Shape};
+use common::model::{self};
+use common::model::{Animatable, Shape};
 use common::model::{Coord, TIME_PER_SECOND, TimeStamp};
 use rand::Rng;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use tokio_stream::Stream;
-use tonic::{Request, Response, Status};
+
+use std::error::Error;
+use std::fmt;
+
+#[derive(Debug)]
+pub enum EngineError {
+	MalformedRequest,
+	UnableToSend,
+}
+
+impl fmt::Display for EngineError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			EngineError::MalformedRequest => write!(f, "Malformed request"),
+			EngineError::UnableToSend => write!(f, "Unable to send message"),
+		}
+	}
+}
+
+impl Error for EngineError {}
 
 fn wall_time() -> u64 {
 	std::time::SystemTime::now()
@@ -30,8 +41,6 @@ fn wall_time() -> u64 {
 async fn tick(
 	tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
 	_game_state: &mut GameState,
-	// wall_ns?
-	// wall_ms: u64,
 ) -> Result<(), broadcast::error::SendError<crate::event::PublishEvent>> {
 	// For now: game_time == wall_time (you can change this later)
 
@@ -86,29 +95,104 @@ pub async fn run_engine(
 	}
 }
 
+async fn handle_player_joined(
+	player_id: u64,
+	game_state: &mut GameState,
+	tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
+) -> Result<(), EngineError> {
+	println!("Player joined: {}", player_id);
+	Ok(())
+}
+
+async fn hanlde_player_left(
+	player_id: u64,
+	game_state: &mut GameState,
+	tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
+) -> Result<(), EngineError> {
+	println!("Player left: {}", player_id);
+	Ok(())
+}
+
+async fn handle_create_unit(
+	unit_id: common::model::UnitId,
+	game_state: &mut GameState,
+	tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
+) -> Result<(), EngineError> {
+	println!("Create unit: {}", unit_id);
+
+	let anim = create_unit(unit_id);
+
+	game_state
+		.unit_tasks
+		.insert(unit_id, common::model::Tasks::default());
+
+	tick_completion_sender
+		.send(crate::event::PublishEvent::UnitCreated(anim))
+		.map_err(|_| EngineError::UnableToSend)?;
+
+	Ok(())
+}
+
+async fn handle_update_intentions(
+	request: common::grpc::QueueRequest,
+	game_state: &mut GameState,
+	tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
+) -> Result<(), EngineError> {
+	let tasks = request
+		.task
+		.iter()
+		.map(|x| {
+			return <Result<
+                common::model::Task,
+                common::convert::ParseError,
+            >>::from(x);
+		})
+		.collect::<Result<Vec<common::model::Task>, common::convert::ParseError>>(
+		)
+		.map_err(|_| EngineError::MalformedRequest)?;
+
+	if let Err(e) = game_state.queue_tasks(request.unit_id, tasks) {
+		tick_completion_sender
+			.send(crate::event::PublishEvent::Warning(WarningContent {
+				// TODO
+				user_id: 0,
+				message: format!(
+					"No tasks found for unit ID {}",
+					request.unit_id
+				),
+			}))
+			.map_err(|_| EngineError::UnableToSend)?;
+		return Err(e);
+	}
+
+	Ok(())
+}
+
 async fn handle_user_request(
 	request: crate::event::PlayerRequest,
 	game_state: &mut GameState,
 	tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
-) -> Result<(), broadcast::error::SendError<crate::event::PublishEvent>> {
+) -> Result<(), EngineError> {
 	match request {
 		crate::event::PlayerRequest::PlayerJoined(player_id) => {
-			println!("Player joined: {}", player_id);
+			handle_player_joined(player_id, game_state, tick_completion_sender)
+				.await?
 		}
 		crate::event::PlayerRequest::CreateUnit(unit_id) => {
-			println!("Create unit: {}", unit_id);
-
-			let _anim = make_random_anim(unit_id);
-			let anim = create_unit(unit_id);
-
-			tick_completion_sender
-				.send(crate::event::PublishEvent::UnitCreated(anim))?;
+			handle_create_unit(unit_id, game_state, tick_completion_sender)
+				.await?
 		}
-		crate::event::PlayerRequest::UpdateIntentions { .. } => {
-			println!("Update intentions");
+		crate::event::PlayerRequest::UpdateIntentions(request) => {
+			handle_update_intentions(
+				request,
+				game_state,
+				tick_completion_sender,
+			)
+			.await?
 		}
 		crate::event::PlayerRequest::PlayerLeft(player_id) => {
-			println!("Player left: {}", player_id);
+			hanlde_player_left(player_id, game_state, tick_completion_sender)
+				.await?
 		}
 	}
 

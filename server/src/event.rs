@@ -3,38 +3,43 @@ use common::model::TimeStamp;
 use common::model::UnitId;
 
 pub struct TickEvent {
-    pub wall_ms: TimeStamp,
+	pub wall_ms: TimeStamp,
 }
 
 #[derive(Debug, Clone)]
 pub struct TickCompletedEvent {
-    pub wall_ms: TimeStamp,
-    pub game_time: TimeStamp,
+	pub wall_ms: TimeStamp,
+	pub game_time: TimeStamp,
 }
 
 pub struct UpdateIntentionsEvent {}
 
 pub enum PlayerRequest {
-    PlayerJoined(PlayerId),
-    CreateUnit(UnitId),
-    UpdateIntentions {
-        // intentions: common::grpc::PlayerIntentions,
-    },
-    PlayerLeft(PlayerId),
+	PlayerJoined(PlayerId),
+	CreateUnit(UnitId),
+	UpdateIntentions(common::grpc::QueueRequest),
+	PlayerLeft(PlayerId),
+}
+
+#[derive(Debug, Clone)]
+pub struct WarningContent {
+	pub user_id: PlayerId,
+	pub message: String,
 }
 
 #[derive(Debug, Clone)]
 pub enum PublishEvent {
-    UnitCreated(common::model::Animatable),
-    TickCompleted(TickCompletedEvent),
+	Warning(WarningContent),
+	UnitCreated(common::model::Animatable),
+	TickCompleted(TickCompletedEvent),
 }
 
 pub enum EngineEvent {
-    Tick(TimeStamp),
-    PlayerRequest(PlayerRequest),
+	Tick(TimeStamp),
+	PlayerRequest(PlayerRequest),
 }
 
 pub enum GameServerEvent {
-    Engine(EngineEvent),
-    PublishEvent(PublishEvent),
+	Engine(EngineEvent),
+	PublishEvent(PublishEvent),
 }

@@ -58,6 +58,7 @@ message Begin {
 
 message Show {
   Animatable anim = 1;
+  Point location = 2;
 }
 
 message Update {
@@ -75,6 +76,10 @@ message Synchronize {
 //  float64 speed = 3;
 }
 
+message Warning {
+  string message = 1;
+}
+
 message Event {
   oneof kind {
     Begin begin = 1;
@@ -82,6 +87,7 @@ message Event {
     Update update = 3;
     Hide hide = 4;
     Synchronize synchronize = 5;
+    Warning warning = 6;
   }
 }
 
@@ -115,7 +121,7 @@ message Task {
 
 
 message QueueRequest {
-  uint64 id = 1;
+  uint64 unit_id = 1;
   repeated Task task = 2;
 }
 
@@ -129,5 +135,4 @@ service ShapeEvents {
   rpc CreateShape(CreateShapeRequest) returns (CreateShapeResponse);
   rpc Queue(QueueRequest) returns (QueueResponse);
   rpc ClearQueue(ClearQueueRequest) returns (ClearQueueResponse);
-
 }
