@@ -1,3 +1,4 @@
+use crate::grpc;
 use serde::{Deserialize, Serialize};
 
 // Make this an int as well
@@ -161,6 +162,18 @@ impl From<(&Shape, &Point)> for PositionedShape {
 	}
 }
 
+impl From<(&grpc::Shape, &grpc::Point)> for PositionedShape {
+	fn from(t: (&grpc::Shape, &grpc::Point)) -> Self {
+		(&Shape::from(t.0), &Point::from(t.1)).into()
+	}
+}
+
+impl From<(&&grpc::Shape, &&grpc::Point)> for PositionedShape {
+	fn from(t: (&&grpc::Shape, &&grpc::Point)) -> Self {
+		(&Shape::from(t.0), &Point::from(t.1)).into()
+	}
+}
+
 impl PositionedShape {
 	pub fn intersects(&self, other: &PositionedShape) -> bool {
 		match self {
@@ -181,6 +194,13 @@ impl PositionedShape {
 		match self {
 			PositionedShape::Circle(circ) => circ.contains_point(point),
 			PositionedShape::Rectangle(rec) => rec.contains_point(point),
+		}
+	}
+
+	pub fn center(&self) -> Point {
+		match self {
+			PositionedShape::Circle(circ) => circ.center.clone(),
+			PositionedShape::Rectangle(rec) => rec.center(),
 		}
 	}
 }
@@ -220,7 +240,7 @@ impl Rec {
 			|| self.min.y > other.max.y)
 	}
 
-	pub fn intersects_circle(&self, other: &PositionedCircle) -> bool {
+	pub fn intersects_circle(&self, other: &CenteredCircle) -> bool {
 		let closest_x = other.center.x.clamp(self.min.x, self.max.x);
 		let closest_y = other.center.y.clamp(self.min.y, self.max.y);
 

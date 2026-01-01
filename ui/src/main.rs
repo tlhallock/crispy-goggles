@@ -7,6 +7,7 @@ use common::model::{
 use futures::StreamExt;
 use leptos::mount::mount_to_body;
 use leptos::prelude::*;
+use leptos::svg::Rect;
 use leptos::task::spawn_local;
 use std::cell::RefCell;
 use std::collections::{self, BTreeSet, HashMap};
@@ -431,7 +432,7 @@ fn apply_event(state: &mut UiState, ev: &Event) {
 					state.last_unit_pos.insert(
 						anim.id,
 						// todo: ignore orientation for now
-						PositionedShape::from((
+						common::model::PositionedShape::from((
 							&anim.shape.as_ref().unwrap(),
 							&location,
 						)),
@@ -545,6 +546,9 @@ fn App() -> impl IntoView {
 	let (last_mouse_pos, set_last_mouse_pos) =
 		signal::<Option<(f64, f64)>>(None);
 	let (is_drawing_rect, set_is_drawing_rect) = signal(false);
+	let (mouse_down_pos, set_mouse_down_pos) =
+		signal::<Option<(f64, f64)>>(None); // Track where mouse was pressed
+	let (has_moved, set_has_moved) = signal(false); // Track if mouse moved during press
 
 	// Update bounds display when trigger changes
 	{
@@ -651,23 +655,25 @@ fn App() -> impl IntoView {
 	let shared_for_mouse = shared.clone();
 	let shared_for_mouse_down = shared_for_mouse.clone();
 	let on_mouse_down = move |ev: web_sys::MouseEvent| {
+		let canvas = get_canvas("canvas");
+		let scale_x = canvas.width() as f64 / canvas.offset_width() as f64;
+		let scale_y = canvas.height() as f64 / canvas.offset_height() as f64;
+
+		let mouse_x = ev.offset_x() as f64 * scale_x;
+		let mouse_y = ev.offset_y() as f64 * scale_y;
+
+		// Track mouse down position and reset movement flag
+		set_mouse_down_pos.set(Some((mouse_x, mouse_y)));
+		set_has_moved.set(false);
+
 		if ev.button() == 2 {
 			// right button - pan
 			set_is_dragging.set(true);
 			set_last_mouse_pos
 				.set(Some((ev.offset_x() as f64, ev.offset_y() as f64)));
 		} else if ev.button() == 0 {
-			// Left button - start drawing rectangle
-			ev.prevent_default();
+			// Left button - start drawing rectangle (will convert to click if no movement)
 			set_is_drawing_rect.set(true);
-
-			let canvas = get_canvas("canvas");
-			let scale_x = canvas.width() as f64 / canvas.offset_width() as f64;
-			let scale_y =
-				canvas.height() as f64 / canvas.offset_height() as f64;
-
-			let mouse_x = ev.offset_x() as f64 * scale_x;
-			let mouse_y = ev.offset_y() as f64 * scale_y;
 
 			let mut state = shared_for_mouse_down.borrow_mut();
 			let (start_x, start_y) =
@@ -687,6 +693,18 @@ fn App() -> impl IntoView {
 		let canvas = get_canvas("canvas");
 		let scale_x = canvas.width() as f64 / canvas.offset_width() as f64;
 		let scale_y = canvas.height() as f64 / canvas.offset_height() as f64;
+
+		let mouse_x = ev.offset_x() as f64 * scale_x;
+		let mouse_y = ev.offset_y() as f64 * scale_y;
+
+		// Check if mouse has moved significantly from down position (threshold of 3 pixels)
+		if let Some((down_x, down_y)) = mouse_down_pos.get() {
+			let dx = (mouse_x - down_x).abs();
+			let dy = (mouse_y - down_y).abs();
+			if dx > 3.0 || dy > 3.0 {
+				set_has_moved.set(true);
+			}
+		}
 
 		if is_dragging.get() {
 			// Handle panning
@@ -713,9 +731,6 @@ fn App() -> impl IntoView {
 			}
 		} else if is_drawing_rect.get() {
 			// Handle rectangle drawing
-			let mouse_x = ev.offset_x() as f64 * scale_x;
-			let mouse_y = ev.offset_y() as f64 * scale_y;
-
 			let mut state = shared_for_mouse_move.borrow_mut();
 			let (current_x, current_y) =
 				state.zoom.pixel_to_map((mouse_x, mouse_y), &canvas);
@@ -729,51 +744,150 @@ fn App() -> impl IntoView {
 
 	let shared_for_mouse_up = shared_for_mouse.clone();
 	let on_mouse_up = move |ev: web_sys::MouseEvent| {
+		let canvas = get_canvas("canvas");
+		let scale_x = canvas.width() as f64 / canvas.offset_width() as f64;
+		let scale_y = canvas.height() as f64 / canvas.offset_height() as f64;
+
+		let mouse_x = ev.offset_x() as f64 * scale_x;
+		let mouse_y = ev.offset_y() as f64 * scale_y;
+
 		if ev.button() == 2 {
-			set_is_dragging.set(false);
-			set_last_mouse_pos.set(None);
-		} else if ev.button() == 0 && is_drawing_rect.get() {
-			// Finish drawing rectangle
-			set_is_drawing_rect.set(false);
+			// Right button
+			if !has_moved.get() {
+				// Right click - check for shapes at click point
+				let mut state = shared_for_mouse_up.borrow_mut();
+				let (click_x, click_y) =
+					state.zoom.pixel_to_map((mouse_x, mouse_y), &canvas);
+				let click_point = Point {
+					x: click_x as Coord,
+					y: click_y as Coord,
+				};
 
-			let mut state = shared_for_mouse_up.borrow_mut();
-			if let Some(rect) = state.drawing_rect.take() {
-				let rec: common::model::Rec = rect.into();
-
-				state.selected_units = state
+				let intersecting_units: Vec<UnitId> = state
 					.last_unit_pos
 					.iter()
 					.filter_map(|(&unit_id, pos)| {
-						if PositionedShape::Rec(rec).intersects(pos) {
+						if pos.contains_point(&click_point) {
 							Some(unit_id)
 						} else {
 							None
 						}
 					})
-					.collect::<collections::BTreeSet<_>>();
+					.collect();
 
-				web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
-					&format!(
-						"Selected units: {:?}",
-						state.selected_units.iter().collect::<Vec<&UnitId>>()
-					),
-				));
-
-				web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
-					&format!(
-						"Rectangle drawn - Center: ({:.2}m, {:.2}m), Width: {:.2}m, Height: {:.2}m, Bounds: X[{:.2}, {:.2}], Y[{:.2}, {:.2}]",
-						rec.center().x,
-						rec.center().y,
-						rec.width(),
-						rec.height(),
-						rec.min.x,
-						rec.max.x,
-						rec.min.y,
-						rec.max.y
-					),
-				));
+				if intersecting_units.is_empty() {
+					web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+						&format!(
+							"Right click at position: ({:.2}m, {:.2}m) - no shapes",
+							click_x, click_y
+						),
+					));
+				} else {
+					web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+						&format!(
+							"Right click - shapes at ({:.2}m, {:.2}m): {:?}",
+							click_x, click_y, intersecting_units
+						),
+					));
+				}
 			}
+
+			set_is_dragging.set(false);
+			set_last_mouse_pos.set(None);
+		} else if ev.button() == 0 {
+			// Left button
+			if !has_moved.get() && is_drawing_rect.get() {
+				// Left click - select single unit
+				let mut state = shared_for_mouse_up.borrow_mut();
+				let (click_x, click_y) =
+					state.zoom.pixel_to_map((mouse_x, mouse_y), &canvas);
+				let click_point = Point {
+					x: click_x as Coord,
+					y: click_y as Coord,
+				};
+
+				web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+					&format!(
+						"Left click at: ({:.2}m, {:.2}m)",
+						click_x, click_y
+					),
+				));
+
+				state.selected_units.clear();
+				state.drawing_rect = None;
+				if let Some((id, dist)) = state
+					.last_unit_pos
+					.iter()
+					.filter(|(_, pos)| pos.contains_point(&click_point))
+					.map(|(&unit_id, pos)| {
+						// could calc distance, and check > 0
+						let center = pos.center();
+						let dist = ((center.x - (click_x as Coord)).powi(2)
+							+ (center.y - (click_y as Coord)).powi(2))
+						.sqrt();
+						(unit_id, dist)
+					})
+					.min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+				{
+					state.selected_units.insert(id);
+					web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+						&format!(
+							"Selected unit: {} (distance: {:.2}m)",
+							id, dist
+						),
+					));
+				} else {
+					web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+						"No units at click position - selection cleared",
+					));
+				}
+			} else if has_moved.get() && is_drawing_rect.get() {
+				// Left drag - rectangle selection
+				let mut state = shared_for_mouse_up.borrow_mut();
+				if let Some(rect) = state.drawing_rect.take() {
+					let rec: common::model::Rec = rect.into();
+					let rec = &PositionedShape::Rectangle(rec);
+
+					state.selected_units = state
+						.last_unit_pos
+						.iter()
+						.filter(|(_, pos)| pos.intersects(rec))
+						.map(|(&unit_id, _)| unit_id)
+						.collect::<collections::BTreeSet<_>>();
+
+					web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+						&format!(
+							"Selected units: {:?}",
+							state
+								.selected_units
+								.iter()
+								.collect::<Vec<&UnitId>>()
+						),
+					));
+
+					let rec: common::model::Rec = rect.into();
+					web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+						&format!(
+							"Rectangle drawn - Center: ({:.2}m, {:.2}m), Width: {:.2}m, Height: {:.2}m, Bounds: X[{:.2}, {:.2}], Y[{:.2}, {:.2}]",
+							rec.center().x,
+							rec.center().y,
+							rec.width(),
+							rec.height(),
+							rec.min.x,
+							rec.max.x,
+							rec.min.y,
+							rec.max.y
+						),
+					));
+				}
+			}
+
+			set_is_drawing_rect.set(false);
 		}
+
+		// Reset tracking
+		set_mouse_down_pos.set(None);
+		set_has_moved.set(false);
 	};
 
 	let shared_for_wheel = shared_for_mouse.clone();

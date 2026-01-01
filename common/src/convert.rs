@@ -147,3 +147,44 @@ impl From<&grpc::Task> for Result<model::Task, ParseError> {
 		}
 	}
 }
+
+// todo how to clean up these double definitions?
+
+impl From<&grpc::Point> for model::Point {
+	fn from(p: &grpc::Point) -> Self {
+		model::Point { x: p.x, y: p.y }
+	}
+}
+impl From<&&grpc::Point> for model::Point {
+	fn from(p: &&grpc::Point) -> Self {
+		model::Point { x: p.x, y: p.y }
+	}
+}
+
+impl From<&grpc::Shape> for model::Shape {
+	fn from(s: &grpc::Shape) -> Self {
+		match &s.kind {
+			Some(grpc::shape::Kind::Circle(c)) => {
+				model::Shape::Circle(c.radius)
+			}
+			Some(grpc::shape::Kind::Rectangle(r)) => {
+				model::Shape::Rectangle(r.w, r.h)
+			}
+			_ => panic!("Unknown shape kind"),
+		}
+	}
+}
+
+impl From<&&grpc::Shape> for model::Shape {
+	fn from(s: &&grpc::Shape) -> Self {
+		match &s.kind {
+			Some(grpc::shape::Kind::Circle(c)) => {
+				model::Shape::Circle(c.radius)
+			}
+			Some(grpc::shape::Kind::Rectangle(r)) => {
+				model::Shape::Rectangle(r.w, r.h)
+			}
+			_ => panic!("Unknown shape kind"),
+		}
+	}
+}
