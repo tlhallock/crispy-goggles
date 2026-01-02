@@ -1,3 +1,4 @@
+use common::model;
 use common::model::PlayerId;
 use common::model::TimeStamp;
 use common::model::UnitId;
@@ -16,8 +17,9 @@ pub struct UpdateIntentionsEvent {}
 
 pub enum PlayerRequest {
 	PlayerJoined(PlayerId),
-	CreateUnit(UnitId),
+	CreateUnit(PlayerId, UnitId),
 	UpdateIntentions(common::grpc::QueueRequest),
+	ClearQueue(UnitId),
 	PlayerLeft(PlayerId),
 }
 
@@ -28,10 +30,17 @@ pub struct WarningContent {
 }
 
 #[derive(Debug, Clone)]
+pub struct TasksUpdatedEvent {
+	pub unit_id: UnitId,
+	pub tasks: Vec<common::grpc::AnimationSegment>,
+}
+
+#[derive(Debug, Clone)]
 pub enum PublishEvent {
 	Warning(WarningContent),
-	UnitCreated(common::model::Animatable),
+	UnitCreated(/*model::UnitDetails, */ model::Animatable),
 	TickCompleted(TickCompletedEvent),
+	TasksUpdated(TasksUpdatedEvent),
 }
 
 pub enum EngineEvent {

@@ -33,23 +33,34 @@ message Shape {
   }
 }
 
-message PathSegment {
-  uint64 begin_time = 3;
+message UnitPosition {
+  Point location = 1;
+  Shape shape = 2;
+  float orientation = 3;
+}
 
-  Point begin_location = 1;
-  optional Delta delta = 2;
+message AnimationSegment {
+  uint64 begin_time = 1;
 
+  Point begin_location = 2;
+  optional Delta delta = 3;
 
-  float begin_orientation = 6;
-  optional float d_orientation = 7;
+  float begin_orientation = 4;
+  optional float d_orientation = 5;
+}
+
+message UnitDetails {
+  // String name = 1;
+  // health
+  // name
+  // icon
 }
 
 message Animatable {
-  uint64 id = 1;
-  Shape shape = 2;
-  bool fill = 3;
-  Color color = 4;
-  repeated PathSegment path = 5;
+  // not really needed here
+  uint64 unit_id = 1;
+  uint32 display_type = 2;
+  repeated AnimationSegment queue = 3;
 }
 
 message Begin {
@@ -57,13 +68,16 @@ message Begin {
 }
 
 message Show {
-  Animatable anim = 1;
-  Point location = 2;
+  uint64 unit_id = 1;
+  UnitDetails details = 2;
+  Animatable anim = 3;
+  UnitPosition position = 4;
 }
 
 message Update {
-  uint64 id = 1;
-  repeated PathSegment path = 2;
+  uint64 unit_id = 1;
+  repeated AnimationSegment queue = 2;
+  UnitDetails details = 3;
 }
 
 message Hide {
@@ -80,6 +94,10 @@ message Warning {
   string message = 1;
 }
 
+message PlayerIdentity {
+  uint64 player_id = 1;
+}
+
 message Event {
   oneof kind {
     Begin begin = 1;
@@ -88,6 +106,7 @@ message Event {
     Hide hide = 4;
     Synchronize synchronize = 5;
     Warning warning = 6;
+    PlayerIdentity player_identity = 7;
   }
 }
 
@@ -99,7 +118,7 @@ message CreateShapeResponse {
 
 
 message ClearQueueRequest {
-  uint64 id = 1;
+  uint64 unit_id = 1;
 }
 message ClearQueueResponse {}
 
@@ -122,7 +141,7 @@ message Task {
 
 message QueueRequest {
   uint64 unit_id = 1;
-  repeated Task task = 2;
+  repeated Task tasks = 2;
 }
 
 message QueueResponse {

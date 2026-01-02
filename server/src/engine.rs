@@ -1,11 +1,15 @@
 use crate::event::WarningContent;
 use crate::state::GameState;
+use crate::state::SimulatedTask;
+use crate::state::UnitTemplate;
 
 // use single_value_channel::channel_starting_with;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, interval};
 
+use crate::event;
+use crate::state;
 use common::model::{self};
 use common::model::{Animatable, Shape};
 use common::model::{Coord, TIME_PER_SECOND, TimeStamp};
@@ -18,6 +22,7 @@ use std::fmt;
 pub enum EngineError {
 	MalformedRequest,
 	UnableToSend,
+	InternalError,
 }
 
 impl fmt::Display for EngineError {
@@ -25,6 +30,7 @@ impl fmt::Display for EngineError {
 		match self {
 			EngineError::MalformedRequest => write!(f, "Malformed request"),
 			EngineError::UnableToSend => write!(f, "Unable to send message"),
+			EngineError::InternalError => write!(f, "Internal error"),
 		}
 	}
 }
@@ -40,19 +46,23 @@ fn wall_time() -> u64 {
 
 async fn tick(
 	tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
-	_game_state: &mut GameState,
-) -> Result<(), broadcast::error::SendError<crate::event::PublishEvent>> {
+	game_state: &mut GameState,
+) -> Result<(), EngineError> {
 	// For now: game_time == wall_time (you can change this later)
 
 	let wall_ms = wall_time();
 	let game_time = wall_ms;
 
-	tick_completion_sender.send(crate::event::PublishEvent::TickCompleted(
-		crate::event::TickCompletedEvent {
-			wall_ms: wall_ms,
-			game_time: game_time,
-		},
-	))?;
+	game_state.send_incremental_updates(tick_completion_sender)?;
+
+	tick_completion_sender
+		.send(crate::event::PublishEvent::TickCompleted(
+			crate::event::TickCompletedEvent {
+				wall_ms: wall_ms,
+				game_time: game_time,
+			},
+		))
+		.map_err(|_e| EngineError::UnableToSend)?;
 
 	Ok(())
 }
@@ -61,7 +71,7 @@ pub async fn run_engine(
 	mut user_requests_receiver: mpsc::Receiver<crate::event::PlayerRequest>,
 	mut tick_completion_sender: broadcast::Sender<crate::event::PublishEvent>,
 ) {
-	let mut game_state = GameState::new();
+	let mut game_state = GameState::default();
 	let (tick_sender, mut tick_receiver) =
 		tokio::sync::watch::channel::<crate::event::EngineEvent>(
 			crate::event::EngineEvent::Tick(wall_time()),
@@ -98,38 +108,41 @@ pub async fn run_engine(
 async fn handle_player_joined(
 	player_id: u64,
 	game_state: &mut GameState,
-	tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
+	_tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
 ) -> Result<(), EngineError> {
 	println!("Player joined: {}", player_id);
+
+	// todo: send existing units to player...
+	game_state.add_player(player_id);
+
 	Ok(())
 }
 
-async fn hanlde_player_left(
+async fn handle_player_left(
 	player_id: u64,
-	game_state: &mut GameState,
-	tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
+	_game_state: &mut GameState,
+	_tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
 ) -> Result<(), EngineError> {
 	println!("Player left: {}", player_id);
 	Ok(())
 }
 
 async fn handle_create_unit(
+	player_id: common::model::PlayerId,
 	unit_id: common::model::UnitId,
 	game_state: &mut GameState,
 	tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
 ) -> Result<(), EngineError> {
 	println!("Create unit: {}", unit_id);
-
-	let anim = create_unit(unit_id);
-
-	game_state
-		.unit_tasks
-		.insert(unit_id, common::model::Tasks::default());
-
-	tick_completion_sender
-		.send(crate::event::PublishEvent::UnitCreated(anim))
-		.map_err(|_| EngineError::UnableToSend)?;
-
+	game_state.add_unit(
+		player_id,
+		unit_id,
+		UnitTemplate::default(),
+		model::OrientedPoint {
+			point: model::Point { x: 0.0, y: 0.0 },
+			orientation: 0.0,
+		},
+	);
 	Ok(())
 }
 
@@ -138,8 +151,10 @@ async fn handle_update_intentions(
 	game_state: &mut GameState,
 	tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
 ) -> Result<(), EngineError> {
+	// get current position...
+
 	let tasks = request
-		.task
+		.tasks
 		.iter()
 		.map(|x| {
 			return <Result<
@@ -151,19 +166,50 @@ async fn handle_update_intentions(
 		)
 		.map_err(|_| EngineError::MalformedRequest)?;
 
-	if let Err(e) = game_state.queue_tasks(request.unit_id, tasks) {
-		tick_completion_sender
-			.send(crate::event::PublishEvent::Warning(WarningContent {
-				// TODO
-				user_id: 0,
-				message: format!(
-					"No tasks found for unit ID {}",
-					request.unit_id
-				),
-			}))
-			.map_err(|_| EngineError::UnableToSend)?;
-		return Err(e);
-	}
+	let simulated = simulate_tasks(game_state, request.unit_id, tasks)?;
+	game_state.queue_tasks(request.unit_id, simulated)?;
+	// TODO: send event about updated tasks
+
+	// // TODO: this should be more simple when it is done inside the tick...
+	// let mut evt = None;
+	// if let Some(model::Task::MoveTo(t)) = tasks.first() {
+	// 	let res = simulate_move(
+	// 		request.unit_id,
+	// 		// game_state.get_unit_location(request.unit_id)?,
+	// 		model::Point { x: 0.0, y: 0.0 },
+	// 		t.clone(),
+	// 		// todo: which time to use here?
+	// 		0,   // game_state.last_time,
+	// 		5.0, // speed
+	// 		0,   // game_state.next_id, // this should be the next task id
+	// 	)?;
+	// 	evt = Some(event::PublishEvent::TasksUpdated(
+	// 		event::TasksUpdatedEvent {
+	// 			unit_id: request.unit_id,
+	// 			// I guess this only gets the first one for now...
+	// 			tasks: vec![res.animation.into()],
+	// 		},
+	// 	));
+	// }
+
+	// if let Err(e) = game_state.queue_tasks(request.unit_id, tasks) {
+	// 	tick_completion_sender
+	// 		.send(event::PublishEvent::Warning(event::WarningContent {
+	// 			// TODO
+	// 			user_id: 0,
+	// 			message: format!(
+	// 				"No tasks found for unit ID {}",
+	// 				request.unit_id
+	// 			),
+	// 		}))
+	// 		.map_err(|_| EngineError::UnableToSend)?;
+	// 	return Err(e);
+	// }
+	// if let Some(evt) = evt {
+	// 	tick_completion_sender
+	// 		.send(evt)
+	// 		.map_err(|_| EngineError::UnableToSend)?;
+	// }
 
 	Ok(())
 }
@@ -178,9 +224,14 @@ async fn handle_user_request(
 			handle_player_joined(player_id, game_state, tick_completion_sender)
 				.await?
 		}
-		crate::event::PlayerRequest::CreateUnit(unit_id) => {
-			handle_create_unit(unit_id, game_state, tick_completion_sender)
-				.await?
+		crate::event::PlayerRequest::CreateUnit(player_id, unit_id) => {
+			handle_create_unit(
+				player_id,
+				unit_id,
+				game_state,
+				tick_completion_sender,
+			)
+			.await?
 		}
 		crate::event::PlayerRequest::UpdateIntentions(request) => {
 			handle_update_intentions(
@@ -191,93 +242,104 @@ async fn handle_user_request(
 			.await?
 		}
 		crate::event::PlayerRequest::PlayerLeft(player_id) => {
-			hanlde_player_left(player_id, game_state, tick_completion_sender)
+			handle_player_left(player_id, game_state, tick_completion_sender)
 				.await?
+		}
+		crate::event::PlayerRequest::ClearQueue(unit_id) => {
+			game_state.clear_tasks(unit_id)?;
+			tick_completion_sender
+				.send(event::PublishEvent::TasksUpdated(
+					event::TasksUpdatedEvent {
+						unit_id,
+						tasks: vec![],
+					},
+				))
+				.map_err(|_| EngineError::UnableToSend)?;
 		}
 	}
 
 	Ok(())
 }
 
-fn make_random_anim(id: u64) -> Animatable {
-	let mut rng = rand::rng();
+// fn make_random_anim(id: u64) -> Animatable {
+// 	let mut rng = rand::rng();
 
-	let shape = if rng.random_bool(0.5) {
-		Shape::Circle(rng.random_range(10.0..80.0))
-	} else {
-		Shape::Rectangle(
-			rng.random_range(20.0..140.0),
-			rng.random_range(20.0..140.0),
-		)
-	};
+// 	let shape = if rng.random_bool(0.5) {
+// 		Shape::Circle(rng.random_range(10.0..80.0))
+// 	} else {
+// 		Shape::Rectangle(
+// 			rng.random_range(20.0..140.0),
+// 			rng.random_range(20.0..140.0),
+// 		)
+// 	};
 
-	let color = (rng.random::<u8>(), rng.random::<u8>(), rng.random::<u8>());
+// 	let color = (rng.random::<u8>(), rng.random::<u8>(), rng.random::<u8>());
 
-	// todo: extract this to common function
-	let wall_ms = std::time::SystemTime::now()
-		.duration_since(std::time::UNIX_EPOCH)
-		.unwrap_or(Duration::from_secs(0))
-		.as_millis() as u64;
+// 	// todo: extract this to common function
+// 	let wall_ms = std::time::SystemTime::now()
+// 		.duration_since(std::time::UNIX_EPOCH)
+// 		.unwrap_or(Duration::from_secs(0))
+// 		.as_millis() as u64;
 
-	let begin_time =
-		wall_ms + rng.random_range(0..2 * TIME_PER_SECOND) as TimeStamp;
-	let delta = model::Delta {
-		dx: rng.random_range(-1.0..1.0),
-		dy: rng.random_range(-1.0..1.0),
-	}
-	.normalize(5.0 * TIME_PER_SECOND as f64);
-	let begin_location = model::Point {
-		x: rng.random_range(100.0 as Coord..400.0 as Coord),
-		y: rng.random_range(100.0 as Coord..400.0 as Coord),
-	};
-	let d_t = rng.random_range(5 * TIME_PER_SECOND..20 * TIME_PER_SECOND)
-		as TimeStamp;
-	let end_location = model::Point {
-		x: begin_location.x + (d_t as f64 * delta.dx) as Coord,
-		y: begin_location.y + (d_t as f64 * delta.dy) as Coord,
-	};
-	let d_orientation = rng.random_range(-180.0..180.0);
-	let path = vec![
-		common::model::PathSegment {
-			begin_time,
-			begin_location,
-			delta: Some(delta),
-			begin_orientation: rng.random_range(0.0..360.0),
-			d_orientation: Some(d_orientation),
-		},
-		common::model::PathSegment {
-			begin_time: begin_time + d_t,
-			begin_location: end_location,
-			delta: None,
-			begin_orientation: 0.0,
-			d_orientation: None,
-		},
-	];
+// 	let begin_time =
+// 		wall_ms + rng.random_range(0..2 * TIME_PER_SECOND) as TimeStamp;
+// 	let delta = model::Delta {
+// 		dx: rng.random_range(-1.0..1.0),
+// 		dy: rng.random_range(-1.0..1.0),
+// 	}
+// 	.normalize(5.0 * TIME_PER_SECOND as f64);
+// 	let begin_location = model::Point {
+// 		x: rng.random_range(100.0 as Coord..400.0 as Coord),
+// 		y: rng.random_range(100.0 as Coord..400.0 as Coord),
+// 	};
+// 	let d_t = rng.random_range(5 * TIME_PER_SECOND..20 * TIME_PER_SECOND)
+// 		as TimeStamp;
+// 	let end_location = model::Point {
+// 		x: begin_location.x + (d_t as f64 * delta.dx) as Coord,
+// 		y: begin_location.y + (d_t as f64 * delta.dy) as Coord,
+// 	};
+// 	let d_orientation = rng.random_range(-180.0..180.0);
+// 	let path = vec![
+// 		common::model::PathSegment {
+// 			begin_time,
+// 			begin_location,
+// 			delta: Some(delta),
+// 			begin_orientation: rng.random_range(0.0..360.0),
+// 			d_orientation: Some(d_orientation),
+// 		},
+// 		common::model::PathSegment {
+// 			begin_time: begin_time + d_t,
+// 			begin_location: end_location,
+// 			delta: None,
+// 			begin_orientation: 0.0,
+// 			d_orientation: None,
+// 		},
+// 	];
 
-	Animatable {
-		id,
-		shape,
-		fill: rng.random_bool(0.7),
-		color,
-		path,
-	}
-}
+// 	Animatable {
+// 		id,
+// 		shape,
+// 		fill: rng.random_bool(0.7),
+// 		color,
+// 		path,
+// 	}
+// }
 
-fn create_unit(id: common::model::UnitId) -> Animatable {
-	Animatable {
-		id,
-		shape: Shape::Circle(1.0),
-		fill: true,
-		color: (0, 255, 0), // green
-		path: vec![common::model::PathSegment {
-			begin_time: 0,
-			begin_location: common::model::Point { x: 0.0, y: 0.0 },
-			delta: None,
-			begin_orientation: 0.0,
-			d_orientation: None,
-		}],
-	}
-}
+// fn create_unit(id: common::model::UnitId) -> Animatable {
+// 	Animatable {
+// 		id,
+// 		shape: Shape::Circle(1.0),
+// 		fill: true,
+// 		color: (0, 255, 0), // green
+// 		path: vec![common::model::PathSegment {
+// 			begin_time: 0,
+// 			begin_location: common::model::Point { x: 0.0, y: 0.0 },
+// 			delta: None,
+// 			begin_orientation: 0.0,
+// 			d_orientation: None,
+// 		}],
+// 	}
+// }
 
 fn spawn_ticker(
 	tick_sender: tokio::sync::watch::Sender<crate::event::EngineEvent>,
@@ -299,4 +361,95 @@ fn spawn_ticker(
 			}
 		}
 	});
+}
+
+struct SimScratchPad {
+	current_time: TimeStamp,
+	current_location: model::OrientedPoint,
+}
+
+pub fn simulate_move(
+	game_state: &mut GameState,
+	unit_id: model::UnitId,
+	task: model::Task,
+	scratch_pad: &mut SimScratchPad,
+
+	to: model::Point,
+) -> Result<SimulatedTask, EngineError> {
+	let speed = game_state.get_unit_speed(unit_id)?;
+	if speed < 1e-6 as Coord {
+		return Err(EngineError::MalformedRequest);
+	}
+	let dist = scratch_pad.current_location.point.distance_to(&to);
+	if dist < 1e-6 {
+		return Err(EngineError::MalformedRequest);
+	}
+	let duration = dist / speed as f64;
+	let delta = model::Delta::between(&scratch_pad.current_location.point, &to)
+		.normalize(speed);
+	let finish_time = scratch_pad.current_time + duration as TimeStamp;
+	let simulation_id = game_state.get_next_id();
+
+	let ret = SimulatedTask {
+		id: simulation_id,
+		task: task,
+		animation: model::AnimationSegment {
+			begin_time: scratch_pad.current_time,
+			begin_location: scratch_pad.current_location.point.clone(),
+			delta: Some(delta),
+			begin_orientation: 0.0,
+			d_orientation: None,
+		},
+		progress: state::TaskProgress {
+			finish_time,
+			simulation_id,
+		},
+	};
+
+	scratch_pad.current_time = finish_time;
+	scratch_pad.current_location = model::OrientedPoint {
+		point: to,
+		orientation: 0.0,
+	};
+
+	return Ok(ret);
+}
+
+pub fn simulate_task(
+	game_state: &mut GameState,
+	unit_id: model::UnitId,
+	task: model::Task,
+	scratch_pad: &mut SimScratchPad,
+) -> Result<SimulatedTask, EngineError> {
+	// todo
+	let t = task.clone();
+	match task {
+		model::Task::MoveTo(to) => {
+			simulate_move(game_state, unit_id, t, scratch_pad, to)
+		}
+		_ => Err(EngineError::MalformedRequest),
+	}
+}
+
+pub fn simulate_tasks(
+	game_state: &mut GameState,
+	unit_id: model::UnitId,
+	tasks: Vec<model::Task>,
+) -> Result<Vec<SimulatedTask>, EngineError> {
+	let mut begin_time = game_state.get_current_time();
+	let mut scratch_pad = SimScratchPad {
+		current_time: begin_time,
+		current_location: game_state.get_unit_location(unit_id, begin_time)?,
+	};
+
+	let mut simulated_tasks = Vec::new();
+	for task in tasks {
+		simulated_tasks.push(simulate_task(
+			game_state,
+			unit_id,
+			task,
+			&mut scratch_pad,
+		)?);
+	}
+	Ok(simulated_tasks)
 }

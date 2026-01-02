@@ -1,9 +1,11 @@
+use crate::event::PlayerRequest;
 use crate::viewer::GameViewer;
 use common::grpc::{
 	CreateShapeRequest, CreateShapeResponse, Event, SubscribeRequest,
 	shape_events_server::ShapeEvents,
 };
 use common::model::PlayerId;
+use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -19,6 +21,8 @@ pub struct ShapeSvc {
 	next_id: Arc<AtomicU64>,
 	player_requests_tx: tokio::sync::mpsc::Sender<crate::event::PlayerRequest>,
 	tick_tx: broadcast::Sender<crate::event::PublishEvent>,
+
+	secrets: HashMap<PlayerId, String>,
 }
 
 impl ShapeSvc {
@@ -32,6 +36,7 @@ impl ShapeSvc {
 			next_id: Arc::new(AtomicU64::new(1)),
 			player_requests_tx: user_requests_tx,
 			tick_tx,
+			secrets: HashMap::new(),
 		}
 	}
 }
@@ -74,11 +79,21 @@ impl ShapeEvents for ShapeSvc {
 
 	async fn create_shape(
 		&self,
-		_req: Request<CreateShapeRequest>,
+		req: Request<CreateShapeRequest>,
 	) -> Result<Response<CreateShapeResponse>, Status> {
+		// Extract player ID from metadata
+		let player_id = req
+			.metadata()
+			.get("player-id")
+			.and_then(|v| v.to_str().ok())
+			.and_then(|s| s.parse::<u64>().ok())
+			.ok_or_else(|| {
+				Status::unauthenticated("missing or invalid player-id header")
+			})?;
+
 		let id = self.next_id.fetch_add(1, Ordering::Relaxed);
 		self.player_requests_tx
-			.send(crate::event::PlayerRequest::CreateUnit(id))
+			.send(PlayerRequest::CreateUnit(player_id, id))
 			.await
 			.map_err(|_e| {
 				Status::internal("failed to send create unit request")
@@ -91,7 +106,16 @@ impl ShapeEvents for ShapeSvc {
 		&self,
 		req: Request<common::grpc::QueueRequest>,
 	) -> Result<Response<common::grpc::QueueResponse>, Status> {
-		// we have no idea which player it was that sent this
+		// Extract player ID from metadata
+		let _player_id = req
+			.metadata()
+			.get("player-id")
+			.and_then(|v| v.to_str().ok())
+			.and_then(|s| s.parse::<u64>().ok())
+			.ok_or_else(|| {
+				Status::unauthenticated("missing or invalid player-id header")
+			})?;
+
 		self.player_requests_tx
 			.send(crate::event::PlayerRequest::UpdateIntentions(
 				req.into_inner(),
@@ -105,8 +129,26 @@ impl ShapeEvents for ShapeSvc {
 
 	async fn clear_queue(
 		&self,
-		_req: Request<common::grpc::ClearQueueRequest>,
+		req: Request<common::grpc::ClearQueueRequest>,
 	) -> Result<Response<common::grpc::ClearQueueResponse>, Status> {
-		Err(Status::unimplemented("not implemented yet"))
+		// Extract player ID from metadata
+		let _player_id = req
+			.metadata()
+			.get("player-id")
+			.and_then(|v| v.to_str().ok())
+			.and_then(|s| s.parse::<u64>().ok())
+			.ok_or_else(|| {
+				Status::unauthenticated("missing or invalid player-id header")
+			})?;
+
+		self.player_requests_tx
+			.send(crate::event::PlayerRequest::ClearQueue(
+				req.into_inner().unit_id,
+			))
+			.await
+			.map_err(|_e| {
+				Status::internal("failed to send update intentions request")
+			})?;
+		Ok(Response::new(common::grpc::ClearQueueResponse {}))
 	}
 }

@@ -1,16 +1,20 @@
 use common::grpc::shape_events_client::ShapeEventsClient;
-use common::grpc::{CreateShapeRequest, Event, Rectangle, SubscribeRequest};
+use common::grpc::{CreateShapeRequest, Event, SubscribeRequest, Task};
 
+use common::grpc;
+use common::model;
 use common::model::{
-	Coord, OrientedPoint, Point, PositionedShape, TIME_PER_SECOND, UnitId,
+	Coord, OrientedPoint, Point, PositionedShape, TIME_PER_SECOND,
+	UnitDisplayType, UnitId,
 };
 use futures::StreamExt;
 use leptos::mount::mount_to_body;
 use leptos::prelude::*;
-use leptos::svg::Rect;
 use leptos::task::spawn_local;
 use std::cell::RefCell;
 use std::collections::{self, BTreeSet, HashMap};
+use std::error::Error;
+use std::fmt;
 use std::rc::Rc;
 use tonic::Request;
 use tonic_web_wasm_client::Client;
@@ -18,14 +22,12 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, Window};
 
-use std::error::Error;
-use std::fmt;
-
 #[derive(Debug)]
 enum RenderError {
 	MissingTasks,
 	MissingStartTime,
 	InvalidTime,
+	ErrorParsing(common::convert::ParseError),
 }
 
 impl fmt::Display for RenderError {
@@ -39,6 +41,9 @@ impl fmt::Display for RenderError {
 			}
 			RenderError::InvalidTime => {
 				write!(f, "Invalid time value encountered")
+			}
+			RenderError::ErrorParsing(e) => {
+				write!(f, "Error parsing value: {}", e)
 			}
 		}
 	}
@@ -141,6 +146,7 @@ struct UiState {
 	drawing_rect: Option<DrawingRect>,
 	last_unit_pos: HashMap<UnitId, PositionedShape>,
 	selected_units: BTreeSet<UnitId>,
+	player_id: Option<u64>,
 }
 
 fn window() -> Window {
@@ -277,7 +283,7 @@ fn draw_grid(
 }
 
 fn place_for(
-	path: &[common::grpc::PathSegment],
+	path: &[common::grpc::AnimationSegment],
 	t_game: u64,
 ) -> Result<OrientedPoint, RenderError> {
 	// if the binary search doesn't work out...
@@ -310,7 +316,7 @@ fn place_for(
 }
 
 fn eval_segment(
-	seg: &common::grpc::PathSegment,
+	seg: &common::grpc::AnimationSegment,
 	t_game: u64,
 ) -> Result<OrientedPoint, RenderError> {
 	let begin_location = seg
@@ -341,30 +347,35 @@ fn draw_anim(
 	t_game: u64,
 	zoom: &ZoomState,
 ) -> Result<OrientedPoint, RenderError> {
+	let dt = model::UnitDisplayType::parse(anim.display_type)
+		.map_err(|e| RenderError::ErrorParsing(e))?;
 	// color
-	let rgb = anim
-		.color
-		.as_ref()
-		.map(|c| (c.r as u8, c.g as u8, c.b as u8))
-		.unwrap_or((0, 0, 0));
+	let rgb = dt
+		.get_color()
+		// .map(|c| (c.r as u8, c.g as u8, c.b as u8))
+		// .unwrap_or((0, 0, 0))
+		;
 	set_color(ctx, rgb);
 
-	let fill = anim.fill;
+	let d: model::UnitDisplayType =
+		model::UnitDisplayType::parse(anim.display_type)
+			.map_err(|e| RenderError::ErrorParsing(e))?;
+	let fill = d.get_fill();
 
-	let oriented_point = place_for(&anim.path, t_game)?;
+	let oriented_point = place_for(&anim.queue, t_game)?;
 
 	// Convert from meters to pixels using zoom state
 	let (x, y) = zoom.map_to_pixel(
 		(oriented_point.point.x as f64, oriented_point.point.y as f64),
 		canvas,
 	);
-	let shape = anim.shape.as_ref().ok_or(RenderError::MissingTasks)?;
-	let sk = shape.kind.as_ref().ok_or(RenderError::MissingTasks)?;
+	let shape = d.get_shape();
+	// let sk = shape.kind.as_ref().ok_or(RenderError::MissingTasks)?;
 
-	match sk {
-		common::grpc::shape::Kind::Circle(c) => {
+	match shape {
+		model::Shape::Circle(r) => {
 			ctx.begin_path();
-			let radius_pixels = c.radius as f64 * zoom.pixels_per_meter;
+			let radius_pixels = r as f64 * zoom.pixels_per_meter;
 			let _ = ctx.arc(x, y, radius_pixels, 0.0, std::f64::consts::TAU);
 			if fill {
 				ctx.fill();
@@ -372,9 +383,9 @@ fn draw_anim(
 				ctx.stroke();
 			}
 		}
-		common::grpc::shape::Kind::Rectangle(r) => {
-			let w_pixels = r.w as f64 * zoom.pixels_per_meter;
-			let h_pixels = r.h as f64 * zoom.pixels_per_meter;
+		model::Shape::Rectangle(w, h) => {
+			let w_pixels = w as f64 * zoom.pixels_per_meter;
+			let h_pixels = h as f64 * zoom.pixels_per_meter;
 			if fill {
 				ctx.fill_rect(x, y, w_pixels, h_pixels);
 			} else {
@@ -419,6 +430,12 @@ fn apply_event(state: &mut UiState, ev: &Event) {
 	};
 
 	match kind {
+		common::grpc::event::Kind::PlayerIdentity(pi) => {
+			state.player_id = Some(pi.player_id);
+			web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+				&format!("Received player ID: {}", pi.player_id),
+			));
+		}
 		common::grpc::event::Kind::Synchronize(s) => {
 			state.sync = Some(TimeSync {
 				wall_time_ms: s.wall_time,
@@ -427,22 +444,30 @@ fn apply_event(state: &mut UiState, ev: &Event) {
 		}
 		common::grpc::event::Kind::Show(show) => {
 			if let Some(anim) = &show.anim {
-				state.anims.insert(anim.id, anim.clone());
-				if let Some(location) = &show.location {
+				state.anims.insert(anim.unit_id, anim.clone());
+				if let Some(location) = &show.position {
 					state.last_unit_pos.insert(
-						anim.id,
+						anim.unit_id,
 						// todo: ignore orientation for now
 						common::model::PositionedShape::from((
-							&anim.shape.as_ref().unwrap(),
-							&location,
+							// todo unwrap
+							&location.shape.as_ref().unwrap(),
+							&location.location.as_ref().unwrap(),
 						)),
 					);
 				}
 			}
 		}
 		common::grpc::event::Kind::Update(upd) => {
-			if let Some(a) = state.anims.get_mut(&upd.id) {
-				a.path = upd.path.clone();
+			if let Some(a) = state.anims.get_mut(&upd.unit_id) {
+				a.queue = upd.queue.clone();
+			} else {
+				web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(
+					&format!(
+						"Received Update for unknown anim id {}",
+						upd.unit_id
+					),
+				));
 			}
 		}
 		common::grpc::event::Kind::Hide(h) => {
@@ -498,7 +523,7 @@ fn start_animation_loop(
 					web_sys::console::error_1(
 						&wasm_bindgen::JsValue::from_str(&format!(
 							"Render error for anim id {}: {}",
-							anim.id, e
+							anim.unit_id, e
 						)),
 					);
 				}
@@ -633,22 +658,151 @@ fn App() -> impl IntoView {
 		});
 	}
 
-	let on_make_shape = move |_| {
-		spawn_local(async move {
-			let mut client = grpc_client().await;
-			match client
-				.create_shape(Request::new(CreateShapeRequest {}))
-				.await
-			{
-				Ok(resp) => {
-					let id = resp.into_inner().id;
-					set_status.set(format!("CreateShape ok (id={id})"));
+	let on_make_shape = {
+		let shared_for_create = shared.clone();
+		move |_| {
+			let shared = shared_for_create.clone();
+			spawn_local(async move {
+				let mut client = grpc_client().await;
+
+				// Get player ID from state
+				let player_id = {
+					let st = shared.borrow();
+					st.player_id
+				};
+
+				let Some(player_id) = player_id else {
+					set_status.set("No player ID yet".into());
+					return;
+				};
+
+				// Create request with player ID metadata
+				let mut request = Request::new(CreateShapeRequest {});
+				request.metadata_mut().insert(
+					"player-id",
+					player_id.to_string().parse().unwrap(),
+				);
+
+				match client.create_shape(request).await {
+					Ok(resp) => {
+						let id = resp.into_inner().id;
+						web_sys::console::log_1(
+							&wasm_bindgen::JsValue::from_str(&format!(
+								"Created shape with id {}",
+								id
+							)),
+						);
+						set_status.set(format!("CreateShape ok (id={id})"));
+					}
+					Err(e) => {
+						web_sys::console::error_1(
+							&wasm_bindgen::JsValue::from_str(&format!(
+								"CreateShape failed: {e}"
+							)),
+						);
+						set_status.set(format!("CreateShape failed: {e}"));
+					}
 				}
-				Err(e) => {
-					set_status.set(format!("CreateShape failed: {e}"));
+			});
+		}
+	};
+
+	let move_units = {
+		let shared_for_move = shared.clone();
+		move |units: BTreeSet<UnitId>, destination: Point| {
+			let shared = shared_for_move.clone();
+			spawn_local(async move {
+				let mut client = grpc_client().await;
+
+				// Get player ID from state
+				let player_id = {
+					let st = shared.borrow();
+					st.player_id
+				};
+
+				let Some(player_id) = player_id else {
+					set_status.set("No player ID yet".into());
+					return;
+				};
+
+				// TODO: how to parallelize these requests?
+				for unit_id in units {
+					web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+						&format!(
+							"Moving unit {} to ({}, {})",
+							unit_id, destination.x, destination.y
+						),
+					));
+
+					// Clear queue with player ID metadata
+					let mut clear_req =
+						Request::new(grpc::ClearQueueRequest { unit_id });
+					clear_req.metadata_mut().insert(
+						"player-id",
+						player_id.to_string().parse().unwrap(),
+					);
+
+					match client.clear_queue(clear_req).await {
+						Ok(_) => {
+							set_status
+								.set(format!("ClearQueue {} ok", unit_id));
+						}
+						Err(e) => {
+							set_status.set(format!(
+								"ClearQueue {} failed: {}",
+								unit_id, e
+							));
+							web_sys::console::error_1(
+								&wasm_bindgen::JsValue::from_str(&format!(
+									"ClearQueue {} failed: {}",
+									unit_id, e
+								)),
+							);
+							continue;
+						}
+					}
+
+					// Queue task with player ID metadata
+					let mut queue_req = Request::new(grpc::QueueRequest {
+						unit_id,
+						tasks: vec![grpc::Task {
+							kind: Some(grpc::task::Kind::Move(grpc::MoveTo {
+								destination: Some(destination.clone().into()),
+							})),
+						}],
+					});
+					queue_req.metadata_mut().insert(
+						"player-id",
+						player_id.to_string().parse().unwrap(),
+					);
+
+					match client.queue(queue_req).await {
+						Ok(_) => {
+							set_status
+								.set(format!("Queue move {} ok", unit_id));
+							web_sys::console::log_1(
+								&wasm_bindgen::JsValue::from_str(&format!(
+									"Queue move {} ok",
+									unit_id
+								)),
+							);
+						}
+						Err(e) => {
+							set_status.set(format!(
+								"Queue move {} failed: {}",
+								unit_id, e
+							));
+							web_sys::console::error_1(
+								&wasm_bindgen::JsValue::from_str(&format!(
+									"Queue move {} failed: {}",
+									unit_id, e
+								)),
+							);
+						}
+					}
 				}
-			}
-		});
+			})
+		}
 	};
 
 	// Mouse event handlers for pan and zoom
@@ -755,7 +909,7 @@ fn App() -> impl IntoView {
 			// Right button
 			if !has_moved.get() {
 				// Right click - check for shapes at click point
-				let mut state = shared_for_mouse_up.borrow_mut();
+				let state = shared_for_mouse_up.borrow_mut();
 				let (click_x, click_y) =
 					state.zoom.pixel_to_map((mouse_x, mouse_y), &canvas);
 				let click_point = Point {
@@ -763,30 +917,49 @@ fn App() -> impl IntoView {
 					y: click_y as Coord,
 				};
 
-				let intersecting_units: Vec<UnitId> = state
+				// let intersecting_units: Vec<UnitId> = state
+				// 	.last_unit_pos
+				// 	.iter()
+				// 	.filter_map(|(&unit_id, pos)| {
+				// 		if pos.contains_point(&click_point) {
+				// 			Some(unit_id)
+				// 		} else {
+				// 			None
+				// 		}
+				// 	})
+				// 	.collect();
+
+				// TODO: dry
+				if let Some((id, dist)) = state
 					.last_unit_pos
 					.iter()
-					.filter_map(|(&unit_id, pos)| {
-						if pos.contains_point(&click_point) {
-							Some(unit_id)
-						} else {
-							None
-						}
+					.filter(|(_, pos)| pos.contains_point(&click_point))
+					.map(|(&unit_id, pos)| {
+						// could calc distance, and check > 0
+						let center = pos.center();
+						let dist = ((center.x - (click_x as Coord)).powi(2)
+							+ (center.y - (click_y as Coord)).powi(2))
+						.sqrt();
+						(unit_id, dist)
 					})
-					.collect();
+					.min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+				{
+					web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+						&format!(
+							"Right click - shapes at ({:.2}m, {:.2}m): {:?} (distance: {:.2}m)",
+							click_x, click_y, id, dist
+						),
+					));
+				} else {
+					move_units(
+						state.selected_units.clone(),
+						click_point.clone(),
+					);
 
-				if intersecting_units.is_empty() {
 					web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
 						&format!(
 							"Right click at position: ({:.2}m, {:.2}m) - no shapes",
 							click_x, click_y
-						),
-					));
-				} else {
-					web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
-						&format!(
-							"Right click - shapes at ({:.2}m, {:.2}m): {:?}",
-							click_x, click_y, intersecting_units
 						),
 					));
 				}

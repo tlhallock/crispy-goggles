@@ -6,6 +6,7 @@ use crate::{
 #[derive(Debug)]
 pub enum ParseError {
 	MissingRequiredField(&'static str),
+	InvalidValue(&'static str),
 }
 
 impl std::fmt::Display for ParseError {
@@ -13,6 +14,9 @@ impl std::fmt::Display for ParseError {
 		match self {
 			ParseError::MissingRequiredField(field) => {
 				write!(f, "Missing required field: {}", field)
+			}
+			ParseError::InvalidValue(field) => {
+				write!(f, "Invalid value for field: {}", field)
 			}
 		}
 	}
@@ -44,13 +48,16 @@ impl From<model::Point> for grpc::Point {
 
 impl From<model::Delta> for grpc::Delta {
 	fn from(d: model::Delta) -> Self {
-		grpc::Delta { dx: d.dx, dy: d.dy }
+		grpc::Delta {
+			dx: d.dx as f64,
+			dy: d.dy as f64,
+		}
 	}
 }
 
-impl From<model::PathSegment> for grpc::PathSegment {
-	fn from(p: model::PathSegment) -> Self {
-		grpc::PathSegment {
+impl From<model::AnimationSegment> for grpc::AnimationSegment {
+	fn from(p: model::AnimationSegment) -> Self {
+		grpc::AnimationSegment {
 			begin_location: Some(p.begin_location.into()),
 			delta: p.delta.map(Into::into),
 			begin_time: p.begin_time,
@@ -63,26 +70,30 @@ impl From<model::PathSegment> for grpc::PathSegment {
 impl From<model::Animatable> for grpc::Animatable {
 	fn from(a: model::Animatable) -> Self {
 		grpc::Animatable {
-			id: a.id,
-			shape: Some(a.shape.into()),
-			fill: a.fill,
-			color: Some(grpc::Color {
-				r: a.color.0 as u32,
-				g: a.color.1 as u32,
-				b: a.color.2 as u32,
-			}),
-			path: a.path.into_iter().map(Into::into).collect(),
+			unit_id: a.unit_id,
+			display_type: a.display_type as u32,
+			// shape: Some(a.shape.into()),
+			// fill: a.fill,
+			// color: Some(grpc::Color {
+			// 	r: a.color.0 as u32,
+			// 	g: a.color.1 as u32,
+			// 	b: a.color.2 as u32,
+			// }),
+			queue: a.queue.into_iter().map(Into::into).collect(),
 		}
 	}
 }
 
 impl From<model::Animatable> for grpc::Show {
 	fn from(anim: model::Animatable) -> Self {
-		let location =
-			anim.path.first().map(|p| p.begin_location.clone().into());
+		// let location =
+		// 	anim.path.first().map(|p| p.begin_location.clone().into());
 		grpc::Show {
+			unit_id: anim.unit_id,
 			anim: Some(anim.into()),
-			location,
+			details: None,
+			// todo fill in..
+			position: None,
 		}
 	}
 }
@@ -100,8 +111,9 @@ impl From<model::Message> for grpc::Event {
 			},
 			model::Message::Update(id, path) => grpc::Event {
 				kind: Some(Kind::Update(grpc::Update {
-					id,
-					path: path.into_iter().map(Into::into).collect(),
+					unit_id: id,
+					queue: path.into_iter().map(Into::into).collect(),
+					details: None,
 				})),
 			},
 			model::Message::Hide(id) => grpc::Event {
@@ -188,3 +200,21 @@ impl From<&&grpc::Shape> for model::Shape {
 		}
 	}
 }
+
+// impl From<model::Task> for grpc::PathSegment {
+// 	fn from(t: model::Task) -> Self {
+// 		match t {
+// 			model::Task::MoveTo(dest) => grpc::PathSegment {
+// 				begin_location: Some(dest.into()),
+// 				// Uh oh...
+// 				delta: None,
+// 				begin_time: 0,
+// 				begin_orientation: 0.0,
+// 				d_orientation: None,
+// 			},
+// 			model::Task::Transfer(_) => {
+// 				panic!("Task::Transfer not implemented")
+// 			}
+// 		}
+// 	}
+// }

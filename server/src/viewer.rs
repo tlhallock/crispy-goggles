@@ -1,5 +1,7 @@
 use crate::event::PublishEvent;
 use common::model::PlayerId;
+use common::model::UnitId;
+use std::collections::HashSet;
 
 pub struct GameViewer {
 	player_id: PlayerId,
@@ -24,6 +26,20 @@ impl GameViewer {
 	}
 
 	pub async fn handle_events(&mut self) -> Result<(), tonic::Status> {
+		// Send player identity as the first event
+		self.grpc_tx
+			.send(Ok(common::grpc::Event {
+				kind: Some(common::grpc::event::Kind::PlayerIdentity(
+					common::grpc::PlayerIdentity {
+						player_id: self.player_id,
+					},
+				)),
+			}))
+			.await
+			.map_err(|_e| {
+				tonic::Status::internal("failed to send player identity")
+			})?;
+
 		while let Ok(publish_event) = self.rx.recv().await {
 			match publish_event {
 				PublishEvent::TickCompleted(event) => {
@@ -60,6 +76,26 @@ impl GameViewer {
 							kind: Some(common::grpc::event::Kind::Warning(
 								common::grpc::Warning {
 									message: warning.message,
+								},
+							)),
+						}))
+						.await
+						.map_err(|_e| {
+							tonic::Status::internal("failed to send event")
+						})?;
+				}
+				PublishEvent::TasksUpdated(updates) => {
+					self.grpc_tx
+						.send(Ok(common::grpc::Event {
+							kind: Some(common::grpc::event::Kind::Update(
+								common::grpc::Update {
+									unit_id: updates.unit_id,
+									queue: updates
+										.tasks
+										.iter()
+										.map(|t| t.clone())
+										.collect(),
+									details: None,
 								},
 							)),
 						}))
