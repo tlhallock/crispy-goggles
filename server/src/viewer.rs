@@ -1,7 +1,5 @@
 use crate::event::PublishEvent;
 use common::model::PlayerId;
-use common::model::UnitId;
-use std::collections::HashSet;
 
 pub struct GameViewer {
 	player_id: PlayerId,

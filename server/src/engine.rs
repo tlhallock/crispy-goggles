@@ -1,4 +1,3 @@
-use crate::event::WarningContent;
 use crate::state::GameState;
 use crate::state::SimulatedTask;
 use crate::state::UnitTemplate;
@@ -11,9 +10,7 @@ use tokio::time::{Duration, interval};
 use crate::event;
 use crate::state;
 use common::model::{self};
-use common::model::{Animatable, Shape};
-use common::model::{Coord, TIME_PER_SECOND, TimeStamp};
-use rand::Rng;
+use common::model::{Coord, TimeStamp};
 
 use std::error::Error;
 use std::fmt;
@@ -131,7 +128,7 @@ async fn handle_create_unit(
 	player_id: common::model::PlayerId,
 	unit_id: common::model::UnitId,
 	game_state: &mut GameState,
-	tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
+	_tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
 ) -> Result<(), EngineError> {
 	println!("Create unit: {}", unit_id);
 	game_state.add_unit(
@@ -149,7 +146,7 @@ async fn handle_create_unit(
 async fn handle_update_intentions(
 	request: common::grpc::QueueRequest,
 	game_state: &mut GameState,
-	tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
+	_tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
 ) -> Result<(), EngineError> {
 	// get current position...
 
@@ -436,7 +433,7 @@ pub fn simulate_tasks(
 	unit_id: model::UnitId,
 	tasks: Vec<model::Task>,
 ) -> Result<Vec<SimulatedTask>, EngineError> {
-	let mut begin_time = game_state.get_current_time();
+	let begin_time = game_state.get_current_time();
 	let mut scratch_pad = SimScratchPad {
 		current_time: begin_time,
 		current_location: game_state.get_unit_location(unit_id, begin_time)?,

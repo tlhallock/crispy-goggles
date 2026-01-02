@@ -1,11 +1,10 @@
 use common::grpc::shape_events_client::ShapeEventsClient;
-use common::grpc::{CreateShapeRequest, Event, SubscribeRequest, Task};
+use common::grpc::{CreateShapeRequest, Event, SubscribeRequest};
 
 use common::grpc;
 use common::model;
 use common::model::{
-	Coord, OrientedPoint, Point, PositionedShape, TIME_PER_SECOND,
-	UnitDisplayType, UnitId,
+	Coord, OrientedPoint, Point, PositionedShape, TIME_PER_SECOND, UnitId,
 };
 use futures::StreamExt;
 use leptos::mount::mount_to_body;

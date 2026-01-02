@@ -1,14 +1,13 @@
 use crate::event;
-use actix_web::cookie::time;
 use common::model::OrientedPoint;
 use common::model::{
-	Health, PlayerId, Speed, TaskId, Tasks, TimeStamp, UnitId,
+	Health, PlayerId, Speed, TaskId, TimeStamp, UnitId,
 };
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use tokio::sync::broadcast;
 
-use common::{grpc, model};
+use common::model;
 use std::collections::HashSet;
 
 use crate::engine::EngineError;
@@ -133,7 +132,7 @@ impl GameState {
 		player_id: PlayerId,
 		unit_id: UnitId,
 		template: UnitTemplate,
-		location: OrientedPoint,
+		_location: OrientedPoint,
 	) {
 		self.owners.insert(unit_id, player_id);
 		self.unit_tasks.insert(unit_id, vec![]);
@@ -211,7 +210,7 @@ impl GameState {
 
 	fn animate(
 		&self,
-		player_perspective: PlayerId,
+		_player_perspective: PlayerId,
 		unit_id: UnitId,
 	) -> Result<Option<model::Animatable>, EngineError> {
 		// Create an Animatable for the unit
@@ -221,7 +220,7 @@ impl GameState {
 			None => Err(EngineError::InternalError),
 		}?;
 
-		let position = match self.locations.get(&unit_id) {
+		let _position = match self.locations.get(&unit_id) {
 			Some(UnitLocation::Fixed(pos)) => Some(pos.clone()),
 			_ => None,
 		};
@@ -252,7 +251,7 @@ impl GameState {
 	pub fn get_unit_location(
 		&self,
 		unit_id: UnitId,
-		time: TimeStamp,
+		_time: TimeStamp,
 	) -> Result<model::OrientedPoint, EngineError> {
 		match self.locations.get(&unit_id) {
 			Some(UnitLocation::Fixed(pos)) => Ok(pos.clone()),
