@@ -93,7 +93,6 @@ impl From<model::Animatable> for grpc::Show {
 			anim: Some(anim.into()),
 			details: None,
 			// todo fill in..
-			position: None,
 		}
 	}
 }
@@ -121,6 +120,57 @@ impl From<model::Message> for grpc::Event {
 			},
 		}
 	}
+}
+
+// Result<model::Task, ParseError>
+impl From<grpc::AnimationSegment>
+	for Result<model::AnimationSegment, ParseError>
+{
+	fn from(p: grpc::AnimationSegment) -> Self {
+		Ok(model::AnimationSegment {
+			begin_location: p
+				.begin_location
+				.map(|b| model::Point::from(b))
+				.ok_or_else(|| {
+					ParseError::MissingRequiredField(
+						"AnimationSegment.begin_location",
+					)
+				})?,
+			delta: p.delta.map(|d| model::Delta {
+				dx: d.dx as f32,
+				dy: d.dy as f32,
+			}),
+			begin_time: p.begin_time,
+			begin_orientation: p.begin_orientation,
+			d_orientation: p.d_orientation,
+		})
+	}
+}
+
+pub fn parse_animation_segment(
+	p: &grpc::AnimationSegment,
+) -> Result<model::AnimationSegment, ParseError> {
+	Ok(model::AnimationSegment {
+		begin_location: p
+			.begin_location
+			.as_ref()
+			.map(|b| model::Point::from(b))
+			.ok_or_else(|| {
+				ParseError::MissingRequiredField(
+					"AnimationSegment.begin_location",
+				)
+			})?,
+		delta: p.delta.as_ref().map(
+			// Into::into
+			|d| model::Delta {
+				dx: d.dx as f32,
+				dy: d.dy as f32,
+			},
+		),
+		begin_time: p.begin_time,
+		begin_orientation: p.begin_orientation,
+		d_orientation: p.d_orientation,
+	})
 }
 
 // impl From<model::WarningContent> for grpc::Warning {

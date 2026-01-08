@@ -71,7 +71,6 @@ message Show {
   uint64 unit_id = 1;
   UnitDetails details = 2;
   Animatable anim = 3;
-  UnitPosition position = 4;
 }
 
 message Update {
@@ -142,6 +141,7 @@ message Task {
 message QueueRequest {
   uint64 unit_id = 1;
   repeated Task tasks = 2;
+  bool clear = 3;
 }
 
 message QueueResponse {

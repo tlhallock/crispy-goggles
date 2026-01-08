@@ -12,6 +12,7 @@ use crate::state;
 use common::model::{self};
 use common::model::{Coord, TimeStamp};
 
+use common::grpc;
 use std::error::Error;
 use std::fmt;
 
@@ -42,7 +43,7 @@ fn wall_time() -> u64 {
 }
 
 async fn tick(
-	tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
+	tick_completion_sender: &mut broadcast::Sender<event::PublishEvent>,
 	game_state: &mut GameState,
 ) -> Result<(), EngineError> {
 	// For now: game_time == wall_time (you can change this later)
@@ -50,11 +51,24 @@ async fn tick(
 	let wall_ms = wall_time();
 	let game_time = wall_ms;
 
+	while let Some(finish_time) = game_state.get_next_completion() {
+		if finish_time > game_time {
+			break;
+		}
+		println!(
+			"Next task completion at {}, current game time {}",
+			finish_time, game_time
+		);
+		let completion = game_state.remove_completed_task()?;
+		game_state.simulation_completed(completion)?;
+	}
+
+	game_state.advance_to_time(game_time);
 	game_state.send_incremental_updates(tick_completion_sender)?;
 
 	tick_completion_sender
-		.send(crate::event::PublishEvent::TickCompleted(
-			crate::event::TickCompletedEvent {
+		.send(event::PublishEvent::TickCompleted(
+			event::TickCompletedEvent {
 				wall_ms: wall_ms,
 				game_time: game_time,
 			},
@@ -65,13 +79,13 @@ async fn tick(
 }
 
 pub async fn run_engine(
-	mut user_requests_receiver: mpsc::Receiver<crate::event::PlayerRequest>,
-	mut tick_completion_sender: broadcast::Sender<crate::event::PublishEvent>,
+	mut user_requests_receiver: mpsc::Receiver<event::PlayerRequest>,
+	mut tick_completion_sender: broadcast::Sender<event::PublishEvent>,
 ) {
 	let mut game_state = GameState::default();
 	let (tick_sender, mut tick_receiver) =
-		tokio::sync::watch::channel::<crate::event::EngineEvent>(
-			crate::event::EngineEvent::Tick(wall_time()),
+		tokio::sync::watch::channel::<event::EngineEvent>(
+			event::EngineEvent::Tick(wall_time()),
 		);
 
 	spawn_ticker(tick_sender);
@@ -105,7 +119,7 @@ pub async fn run_engine(
 async fn handle_player_joined(
 	player_id: u64,
 	game_state: &mut GameState,
-	_tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
+	_tick_completion_sender: &mut broadcast::Sender<event::PublishEvent>,
 ) -> Result<(), EngineError> {
 	println!("Player joined: {}", player_id);
 
@@ -118,17 +132,17 @@ async fn handle_player_joined(
 async fn handle_player_left(
 	player_id: u64,
 	_game_state: &mut GameState,
-	_tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
+	_tick_completion_sender: &mut broadcast::Sender<event::PublishEvent>,
 ) -> Result<(), EngineError> {
 	println!("Player left: {}", player_id);
 	Ok(())
 }
 
 async fn handle_create_unit(
-	player_id: common::model::PlayerId,
-	unit_id: common::model::UnitId,
+	player_id: model::PlayerId,
+	unit_id: model::UnitId,
 	game_state: &mut GameState,
-	_tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
+	_tick_completion_sender: &mut broadcast::Sender<event::PublishEvent>,
 ) -> Result<(), EngineError> {
 	println!("Create unit: {}", unit_id);
 	game_state.add_unit(
@@ -144,9 +158,9 @@ async fn handle_create_unit(
 }
 
 async fn handle_update_intentions(
-	request: common::grpc::QueueRequest,
+	request: grpc::QueueRequest,
 	game_state: &mut GameState,
-	_tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
+	_tick_completion_sender: &mut broadcast::Sender<event::PublishEvent>,
 ) -> Result<(), EngineError> {
 	// get current position...
 
@@ -164,8 +178,18 @@ async fn handle_update_intentions(
 		.map_err(|_| EngineError::MalformedRequest)?;
 
 	let simulated = simulate_tasks(game_state, request.unit_id, tasks)?;
-	game_state.queue_tasks(request.unit_id, simulated)?;
-	// TODO: send event about updated tasks
+	game_state.queue_tasks_requested(request.unit_id, simulated)?;
+
+	// TODO: move to the tick loop? (sequence number?)
+	// tick_completion_sender
+	// 	.send(event::PublishEvent::TasksUpdated(
+	// 		event::TasksUpdatedEvent {
+	// 			unit_id: request.unit_id,
+	// 			// I guess this only gets the first one for now...
+	// 			tasks: vec![res.animation.into()],
+	// 		},
+	// 	))
+	// 	.map_err(|_| EngineError::UnableToSend)?;
 
 	// // TODO: this should be more simple when it is done inside the tick...
 	// let mut evt = None;
@@ -212,16 +236,16 @@ async fn handle_update_intentions(
 }
 
 async fn handle_user_request(
-	request: crate::event::PlayerRequest,
+	request: event::PlayerRequest,
 	game_state: &mut GameState,
-	tick_completion_sender: &mut broadcast::Sender<crate::event::PublishEvent>,
+	tick_completion_sender: &mut broadcast::Sender<event::PublishEvent>,
 ) -> Result<(), EngineError> {
 	match request {
-		crate::event::PlayerRequest::PlayerJoined(player_id) => {
+		event::PlayerRequest::PlayerJoined(player_id) => {
 			handle_player_joined(player_id, game_state, tick_completion_sender)
 				.await?
 		}
-		crate::event::PlayerRequest::CreateUnit(player_id, unit_id) => {
+		event::PlayerRequest::CreateUnit(player_id, unit_id) => {
 			handle_create_unit(
 				player_id,
 				unit_id,
@@ -230,7 +254,7 @@ async fn handle_user_request(
 			)
 			.await?
 		}
-		crate::event::PlayerRequest::UpdateIntentions(request) => {
+		event::PlayerRequest::UpdateIntentions(request) => {
 			handle_update_intentions(
 				request,
 				game_state,
@@ -238,12 +262,12 @@ async fn handle_user_request(
 			)
 			.await?
 		}
-		crate::event::PlayerRequest::PlayerLeft(player_id) => {
+		event::PlayerRequest::PlayerLeft(player_id) => {
 			handle_player_left(player_id, game_state, tick_completion_sender)
 				.await?
 		}
-		crate::event::PlayerRequest::ClearQueue(unit_id) => {
-			game_state.clear_tasks(unit_id)?;
+		event::PlayerRequest::ClearQueue(unit_id) => {
+			game_state.clear_tasks_requested(unit_id)?;
 			tick_completion_sender
 				.send(event::PublishEvent::TasksUpdated(
 					event::TasksUpdatedEvent {
@@ -255,6 +279,14 @@ async fn handle_user_request(
 		}
 	}
 
+	Ok(())
+}
+
+async fn handle_completion(
+	completion: state::TaskCompletion,
+	game_state: &mut GameState,
+	tick_completion_sender: &mut broadcast::Sender<event::PublishEvent>,
+) -> Result<(), EngineError> {
 	Ok(())
 }
 
@@ -365,7 +397,7 @@ struct SimScratchPad {
 	current_location: model::OrientedPoint,
 }
 
-pub fn simulate_move(
+fn simulate_move(
 	game_state: &mut GameState,
 	unit_id: model::UnitId,
 	task: model::Task,
@@ -399,7 +431,10 @@ pub fn simulate_move(
 		},
 		progress: state::TaskProgress {
 			finish_time,
-			simulation_id,
+			completion: state::TaskCompletion::DestinationReached {
+				unit_id,
+				simulation_id: Some(simulation_id),
+			},
 		},
 	};
 
@@ -412,13 +447,13 @@ pub fn simulate_move(
 	return Ok(ret);
 }
 
-pub fn simulate_task(
+fn simulate_task(
 	game_state: &mut GameState,
 	unit_id: model::UnitId,
 	task: model::Task,
 	scratch_pad: &mut SimScratchPad,
 ) -> Result<SimulatedTask, EngineError> {
-	// todo
+	// todo: no need to clone
 	let t = task.clone();
 	match task {
 		model::Task::MoveTo(to) => {
@@ -428,7 +463,7 @@ pub fn simulate_task(
 	}
 }
 
-pub fn simulate_tasks(
+fn simulate_tasks(
 	game_state: &mut GameState,
 	unit_id: model::UnitId,
 	tasks: Vec<model::Task>,

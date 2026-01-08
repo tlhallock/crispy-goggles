@@ -41,6 +41,7 @@ pub enum PublishEvent {
 	UnitCreated(/*model::UnitDetails, */ model::Animatable),
 	TickCompleted(TickCompletedEvent),
 	TasksUpdated(TasksUpdatedEvent),
+	TasksCompleted(UnitId),
 }
 
 pub enum EngineEvent {

@@ -3,9 +3,7 @@ use common::grpc::{CreateShapeRequest, Event, SubscribeRequest};
 
 use common::grpc;
 use common::model;
-use common::model::{
-	Coord, OrientedPoint, Point, PositionedShape, TIME_PER_SECOND, UnitId,
-};
+use common::model::{Coord, OrientedPoint, Point, PositionedShape, UnitId};
 use futures::StreamExt;
 use leptos::mount::mount_to_body;
 use leptos::prelude::*;
@@ -303,7 +301,7 @@ fn place_for(
 		Err(0) => first
 			.begin_location
 			.map(|p| OrientedPoint {
-				point: common::model::Point {
+				point: model::Point {
 					x: p.x as Coord,
 					y: p.y as Coord,
 				},
@@ -318,25 +316,11 @@ fn eval_segment(
 	seg: &common::grpc::AnimationSegment,
 	t_game: u64,
 ) -> Result<OrientedPoint, RenderError> {
-	let begin_location = seg
-		.begin_location
-		.ok_or_else(|| RenderError::MissingStartTime)?;
-	let d_t = t_game.saturating_sub(seg.begin_time) as f64;
-
-	// Assuming delta.dx and delta.dy are in meters per second
-	Ok(OrientedPoint {
-		point: common::model::Point {
-			x: begin_location.x
-				+ (seg.delta.map_or(0.0, |d| {
-					d.dx as f64 * (d_t / TIME_PER_SECOND as f64)
-				})) as Coord,
-			y: begin_location.y
-				+ (seg.delta.map_or(0.0, |d| {
-					d.dy as f64 * (d_t / TIME_PER_SECOND as f64)
-				})) as Coord,
-		},
-		orientation: seg.begin_orientation + seg.d_orientation.unwrap_or(0.0),
-	})
+	// let segment = common::convert::parse_animation_segment(seg)
+	// 	.map_err(|e| RenderError::ErrorParsing(e))?;
+	Ok(common::convert::parse_animation_segment(seg)
+		.map_err(|e| RenderError::ErrorParsing(e))?
+		.place_at(t_game as model::TimeStamp))
 }
 
 fn draw_anim(
@@ -345,7 +329,7 @@ fn draw_anim(
 	anim: &common::grpc::Animatable,
 	t_game: u64,
 	zoom: &ZoomState,
-) -> Result<OrientedPoint, RenderError> {
+) -> Result<PositionedShape, RenderError> {
 	let dt = model::UnitDisplayType::parse(anim.display_type)
 		.map_err(|e| RenderError::ErrorParsing(e))?;
 	// color
@@ -362,6 +346,10 @@ fn draw_anim(
 	let fill = d.get_fill();
 
 	let oriented_point = place_for(&anim.queue, t_game)?;
+	// web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(&format!(
+	// 	"Drawing anim id {} at point ({}, {})",
+	// 	anim.unit_id, oriented_point.point.x, oriented_point.point.y
+	// )));
 
 	// Convert from meters to pixels using zoom state
 	let (x, y) = zoom.map_to_pixel(
@@ -371,7 +359,7 @@ fn draw_anim(
 	let shape = d.get_shape();
 	// let sk = shape.kind.as_ref().ok_or(RenderError::MissingTasks)?;
 
-	match shape {
+	let pos = match shape {
 		model::Shape::Circle(r) => {
 			ctx.begin_path();
 			let radius_pixels = r as f64 * zoom.pixels_per_meter;
@@ -381,6 +369,10 @@ fn draw_anim(
 			} else {
 				ctx.stroke();
 			}
+			common::model::PositionedShape::Circle(model::CenteredCircle {
+				center: oriented_point.point.clone(),
+				radius: r,
+			})
 		}
 		model::Shape::Rectangle(w, h) => {
 			let w_pixels = w as f64 * zoom.pixels_per_meter;
@@ -390,9 +382,19 @@ fn draw_anim(
 			} else {
 				ctx.stroke_rect(x, y, w_pixels, h_pixels);
 			}
+			common::model::PositionedShape::Rectangle(model::Rec {
+				min: Point {
+					x: oriented_point.point.x - w / (2 as Coord),
+					y: oriented_point.point.y - h / (2 as Coord),
+				},
+				max: Point {
+					x: oriented_point.point.x + w / (2 as Coord),
+					y: oriented_point.point.y + h / (2 as Coord),
+				},
+			})
 		}
-	}
-	Ok(oriented_point)
+	};
+	Ok(pos)
 }
 
 fn draw_rectangle_overlay(
@@ -443,23 +445,22 @@ fn apply_event(state: &mut UiState, ev: &Event) {
 		}
 		common::grpc::event::Kind::Show(show) => {
 			if let Some(anim) = &show.anim {
+				web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+					&format!("Showing anim id {}", anim.unit_id),
+				));
+				// shouldn't need to clone...
 				state.anims.insert(anim.unit_id, anim.clone());
-				if let Some(location) = &show.position {
-					state.last_unit_pos.insert(
-						anim.unit_id,
-						// todo: ignore orientation for now
-						common::model::PositionedShape::from((
-							// todo unwrap
-							&location.shape.as_ref().unwrap(),
-							&location.location.as_ref().unwrap(),
-						)),
-					);
-				}
 			}
 		}
 		common::grpc::event::Kind::Update(upd) => {
 			if let Some(a) = state.anims.get_mut(&upd.unit_id) {
 				a.queue = upd.queue.clone();
+				web_sys::console::log_1(&wasm_bindgen::JsValue::from_str(
+					&format!(
+						"Updated anim id {} to queue {:?}",
+						upd.unit_id, upd.queue
+					),
+				));
 			} else {
 				web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(
 					&format!(
@@ -499,17 +500,17 @@ fn start_animation_loop(
 
 		// Compute current game time
 
-		let t_game = {
+		let (t_game, num_anims) = {
 			let st = shared.borrow();
-
-			// web_sys::console::error_1(&wasm_bindgen::JsValue::from_str(&format!(
-
-			// we should never hit wall_now_ms...
-			game_now_ms(st.sync).unwrap_or_else(wall_now_ms)
+			(
+				game_now_ms(st.sync).unwrap_or_else(wall_now_ms),
+				st.anims.len(),
+			)
 		};
 
-		// Redraw
+		let mut new_positions = HashMap::with_capacity(num_anims);
 		clear(&ctx, &canvas);
+
 		{
 			let st = shared.borrow();
 			// Draw grid first
@@ -517,14 +518,19 @@ fn start_animation_loop(
 
 			// Then draw animations on top
 			for anim in st.anims.values() {
-				if let Err(e) = draw_anim(&ctx, &canvas, anim, t_game, &st.zoom)
-				{
-					web_sys::console::error_1(
-						&wasm_bindgen::JsValue::from_str(&format!(
-							"Render error for anim id {}: {}",
-							anim.unit_id, e
-						)),
-					);
+				let res = draw_anim(&ctx, &canvas, anim, t_game, &st.zoom);
+				match res {
+					Ok(pos) => {
+						new_positions.insert(anim.unit_id, pos);
+					}
+					Err(e) => {
+						web_sys::console::error_1(
+							&wasm_bindgen::JsValue::from_str(&format!(
+								"Render error for anim id {}: {}",
+								anim.unit_id, e
+							)),
+						);
+					}
 				}
 			}
 
@@ -532,6 +538,12 @@ fn start_animation_loop(
 			if let Some(rect) = &st.drawing_rect {
 				draw_rectangle_overlay(&ctx, &canvas, rect, &st.zoom);
 			}
+		} // Drop the immutable borrow here
+
+		// Now we can safely create a mutable borrow
+		{
+			let mut st_mut = shared.borrow_mut();
+			st_mut.last_unit_pos = new_positions;
 		}
 
 		// schedule next frame
@@ -769,6 +781,7 @@ fn App() -> impl IntoView {
 								destination: Some(destination.clone().into()),
 							})),
 						}],
+						clear: false,
 					});
 					queue_req.metadata_mut().insert(
 						"player-id",
@@ -1134,5 +1147,8 @@ fn App() -> impl IntoView {
 }
 
 pub fn main() {
+	// Set up better panic messages in the browser console
+	console_error_panic_hook::set_once();
+
 	mount_to_body(|| view! { <App/> })
 }

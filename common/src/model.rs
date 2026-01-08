@@ -18,11 +18,11 @@ pub const METERS: Coord = 1_000 as Coord;
 pub const SECONDS: TimeStamp = 1_000_000 as TimeStamp;
 
 // todo just do nanoseconds...
-pub const TIME_PER_SECOND: u64 = 1_000;
+// pub const TIME_PER_SECOND: u64 = 1_000;
 
 #[derive(Clone, Debug, Serialize, Deserialize, Copy)]
 pub enum UnitDisplayType {
-	SimpleUnit,
+	SimpleUnit = 1,
 }
 
 pub struct Health {
@@ -67,7 +67,7 @@ pub struct Delta {
 	pub dy: Coord,
 }
 
-// TODO...
+// TODO...  too many structs for the same thing
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OrientedPoint {
 	pub point: Point,
@@ -86,6 +86,28 @@ pub struct AnimationSegment {
 	pub begin_orientation: Orientation,
 	pub d_orientation: Option<Orientation>,
 	// add a progress here?
+}
+
+impl AnimationSegment {
+	pub fn place_at(&self, time: TimeStamp) -> OrientedPoint {
+		let d_t = time.saturating_sub(self.begin_time) as f64;
+		let dx = self
+			.delta
+			.as_ref()
+			.map_or(0.0, |d| d.dx as f64 * (d_t as f64));
+		let dy = self
+			.delta
+			.as_ref()
+			.map_or(0.0, |d| d.dy as f64 * (d_t as f64));
+		OrientedPoint {
+			point: Point {
+				x: self.begin_location.x + dx as Coord,
+				y: self.begin_location.y + dy as Coord,
+			},
+			orientation: self.begin_orientation
+				+ self.d_orientation.unwrap_or(0.0),
+		}
+	}
 }
 
 #[derive(Clone, Debug)]
@@ -572,11 +594,11 @@ impl UnitDisplayType {
 		}
 	}
 
-	pub fn get_int(self) -> u32 {
-		match self {
-			UnitDisplayType::SimpleUnit => 1,
-		}
-	}
+	// pub fn get_int(self) -> u32 {
+	// 	match self {
+	// 		UnitDisplayType::SimpleUnit => UnitDisplayType::SimpleUnit as u32,
+	// 	}
+	// }
 
 	pub fn parse(
 		value: u32,

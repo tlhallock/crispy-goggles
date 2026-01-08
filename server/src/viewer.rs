@@ -102,6 +102,22 @@ impl GameViewer {
 							tonic::Status::internal("failed to send event")
 						})?;
 				}
+				PublishEvent::TasksCompleted(completions) => {
+					self.grpc_tx
+						.send(Ok(common::grpc::Event {
+							kind: Some(common::grpc::event::Kind::Update(
+								common::grpc::Update {
+									unit_id: completions,
+									queue: vec![],
+									details: None,
+								},
+							)),
+						}))
+						.await
+						.map_err(|_e| {
+							tonic::Status::internal("failed to send event")
+						})?;
+				}
 			}
 		}
 		Ok(())
