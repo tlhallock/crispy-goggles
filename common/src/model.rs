@@ -358,10 +358,10 @@ pub struct ShapeVolume {
 
 impl ShapeVolume {
 	pub fn moved_rect_intersects_rect(
-		t1: TimeStamp,
-		r1: &Rec,
-		t2: TimeStamp,
-		r2: &Rec,
+		_t1: TimeStamp,
+		_r1: &Rec,
+		_t2: TimeStamp,
+		_r2: &Rec,
 	) -> bool {
 		/* t, x, y
 		 such that:
@@ -373,7 +373,7 @@ impl ShapeVolume {
 		false
 	}
 
-	pub fn intersects(&self, other: &ShapeVolume) -> bool {
+	pub fn intersects(&self, _other: &ShapeVolume) -> bool {
 		false
 	}
 }

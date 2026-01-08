@@ -1,9 +1,7 @@
 use crate::event;
 use crate::unit_tasks::UnitTasks;
-use common::grpc::Task;
 use common::model::{Health, PlayerId, Speed, TaskId, TimeStamp, UnitId};
-use common::model::{METERS, OrientedPoint};
-use rand::rand_core::impls;
+use common::model::OrientedPoint;
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use tokio::sync::broadcast;
@@ -612,11 +610,11 @@ impl GameState {
 	pub async fn task_completed(
 		&mut self,
 		completion: TaskCompletion,
-		tick_completion_sender: &mut broadcast::Sender<
+		_tick_completion_sender: &mut broadcast::Sender<
 			crate::event::PublishEvent,
 		>,
 	) -> Result<(), EngineError> {
-		if let Some(simulation_id) = completion.get_simulation_id() {}
+		if let Some(_simulation_id) = completion.get_simulation_id() {}
 		Ok(())
 	}
 }

@@ -283,9 +283,9 @@ async fn handle_user_request(
 }
 
 async fn handle_completion(
-	completion: state::TaskCompletion,
-	game_state: &mut GameState,
-	tick_completion_sender: &mut broadcast::Sender<event::PublishEvent>,
+	_completion: state::TaskCompletion,
+	_game_state: &mut GameState,
+	_tick_completion_sender: &mut broadcast::Sender<event::PublishEvent>,
 ) -> Result<(), EngineError> {
 	Ok(())
 }
