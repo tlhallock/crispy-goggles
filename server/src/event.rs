@@ -18,7 +18,7 @@ pub struct UpdateIntentionsEvent {}
 pub enum PlayerRequest {
 	PlayerJoined(PlayerId),
 	CreateUnit(PlayerId, UnitId),
-	UpdateIntentions(common::grpc::QueueRequest),
+	UpdateIntentions(common::grpc::SetQueueRequest),
 	ClearQueue(UnitId),
 	PlayerLeft(PlayerId),
 }

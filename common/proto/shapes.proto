@@ -138,13 +138,14 @@ message Task {
 }
 
 
-message QueueRequest {
+// Todo: rename to 
+message SetQueueRequest {
   uint64 unit_id = 1;
   repeated Task tasks = 2;
-  bool clear = 3;
+  // bool clear = 3;
 }
 
-message QueueResponse {
+message SetQueueResponse {
   bool valid = 1;
 }
 
@@ -152,6 +153,6 @@ message QueueResponse {
 service ShapeEvents {
   rpc Subscribe(SubscribeRequest) returns (stream Event);
   rpc CreateShape(CreateShapeRequest) returns (CreateShapeResponse);
-  rpc Queue(QueueRequest) returns (QueueResponse);
+  rpc Queue(SetQueueRequest) returns (SetQueueResponse);
   rpc ClearQueue(ClearQueueRequest) returns (ClearQueueResponse);
 }

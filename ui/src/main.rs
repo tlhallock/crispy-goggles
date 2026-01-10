@@ -753,6 +753,7 @@ fn App() -> impl IntoView {
 						player_id.to_string().parse().unwrap(),
 					);
 
+					// no need to cllear
 					match client.clear_queue(clear_req).await {
 						Ok(_) => {
 							set_status
@@ -774,14 +775,13 @@ fn App() -> impl IntoView {
 					}
 
 					// Queue task with player ID metadata
-					let mut queue_req = Request::new(grpc::QueueRequest {
+					let mut queue_req = Request::new(grpc::SetQueueRequest {
 						unit_id,
 						tasks: vec![grpc::Task {
 							kind: Some(grpc::task::Kind::Move(grpc::MoveTo {
 								destination: Some(destination.clone().into()),
 							})),
 						}],
-						clear: false,
 					});
 					queue_req.metadata_mut().insert(
 						"player-id",

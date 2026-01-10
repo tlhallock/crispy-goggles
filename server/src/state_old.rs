@@ -1,7 +1,7 @@
 use crate::event;
 use crate::unit_tasks::UnitTasks;
-use common::model::{Health, PlayerId, Speed, TaskId, TimeStamp, UnitId};
 use common::model::OrientedPoint;
+use common::model::{Health, PlayerId, Speed, TaskId, TimeStamp, UnitId};
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use tokio::sync::broadcast;
@@ -11,6 +11,7 @@ use std::collections::HashSet;
 
 use crate::engine::EngineError;
 
+// put this in a state mod and limit scope?
 pub type SimulatedId = u64;
 pub type SequenceNumber = u64;
 
@@ -26,16 +27,6 @@ pub enum UnitLocation {
 // 	sequence_number: SequenceNumber,
 // 	tasks: Vec<SimulatedId>,
 // }
-
-#[derive(Debug)]
-pub enum TaskCompletion {
-	DestinationReached {
-		unit_id: UnitId,
-		// This should really be a location, it doesn't matter how
-		// it got there
-		simulation_id: Option<SimulatedId>,
-	},
-}
 
 #[derive(Debug)]
 pub struct TaskProgress {

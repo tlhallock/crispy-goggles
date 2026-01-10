@@ -13,7 +13,6 @@ mod engine;
 mod event;
 mod state;
 mod svc;
-mod unit_tasks;
 mod viewer;
 
 #[tokio::main]

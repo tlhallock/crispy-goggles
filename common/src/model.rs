@@ -30,7 +30,7 @@ pub struct Health {
 	pub max: i32,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Task {
 	MoveTo(Point),
 	Transfer(Transfer),
@@ -40,7 +40,7 @@ pub struct Tasks {
 	pub tasks: Vec<(u64, Task)>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Transfer {
 	pub resource_id: ResourceId,
 	pub amount: i32,
@@ -60,6 +60,18 @@ pub struct Point {
 	pub x: Coord,
 	pub y: Coord,
 }
+
+impl PartialEq for Point {
+	// fn neq(&self, other: &Self) -> bool {
+	// 	(self.x - other.x).abs() > 1e-6 || (self.y - other.y).abs() > 1e-6
+	// }
+	fn eq(&self, other: &Self) -> bool {
+		// Todo: this is only used in an assert
+		(self.x - other.x).abs() <= 1e-6 && (self.y - other.y).abs() <= 1e-6
+	}
+}
+
+impl Eq for Point {}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Delta {

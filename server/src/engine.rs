@@ -1,6 +1,9 @@
-use crate::state::GameState;
-use crate::state::SimulatedTask;
-use crate::state::UnitTemplate;
+use crate::state::game::GameState;
+use crate::state::game::TaskProgress;
+use crate::state::tasks;
+use crate::state::tasks::CompletedTask;
+use crate::state::tasks::SimulatedTask;
+use crate::state::templates::UnitTemplate;
 
 // use single_value_channel::channel_starting_with;
 use tokio::sync::broadcast;
@@ -21,6 +24,7 @@ pub enum EngineError {
 	MalformedRequest,
 	UnableToSend,
 	InternalError,
+	InvalidUnitId,
 }
 
 impl fmt::Display for EngineError {
@@ -29,6 +33,7 @@ impl fmt::Display for EngineError {
 			EngineError::MalformedRequest => write!(f, "Malformed request"),
 			EngineError::UnableToSend => write!(f, "Unable to send message"),
 			EngineError::InternalError => write!(f, "Internal error"),
+			EngineError::InvalidUnitId => write!(f, "Invalid unit ID"),
 		}
 	}
 }
@@ -59,8 +64,12 @@ async fn tick(
 			"Next task completion at {}, current game time {}",
 			finish_time, game_time
 		);
-		let completion = game_state.remove_completed_task()?;
-		game_state.simulation_completed(completion)?;
+		let progress = game_state.remove_completed_task()?;
+		match progress.completion {
+			tasks::SimulationEvent::TaskCompleted(ct) => {
+				game_state.task_completed(progress.finish_time, ct)?;
+			}
+		}
 	}
 
 	game_state.advance_to_time(game_time);
@@ -158,7 +167,7 @@ async fn handle_create_unit(
 }
 
 async fn handle_update_intentions(
-	request: grpc::QueueRequest,
+	request: grpc::SetQueueRequest,
 	game_state: &mut GameState,
 	_tick_completion_sender: &mut broadcast::Sender<event::PublishEvent>,
 ) -> Result<(), EngineError> {
@@ -178,7 +187,7 @@ async fn handle_update_intentions(
 		.map_err(|_| EngineError::MalformedRequest)?;
 
 	let simulated = simulate_tasks(game_state, request.unit_id, tasks)?;
-	game_state.queue_tasks_requested(request.unit_id, simulated)?;
+	game_state.set_task_queue_requested(request.unit_id, simulated)?;
 
 	// TODO: move to the tick loop? (sequence number?)
 	// tick_completion_sender
@@ -267,7 +276,7 @@ async fn handle_user_request(
 				.await?
 		}
 		event::PlayerRequest::ClearQueue(unit_id) => {
-			game_state.clear_tasks_requested(unit_id)?;
+			game_state.set_task_queue_requested(unit_id, vec![])?;
 			tick_completion_sender
 				.send(event::PublishEvent::TasksUpdated(
 					event::TasksUpdatedEvent {
@@ -279,14 +288,6 @@ async fn handle_user_request(
 		}
 	}
 
-	Ok(())
-}
-
-async fn handle_completion(
-	_completion: state::TaskCompletion,
-	_game_state: &mut GameState,
-	_tick_completion_sender: &mut broadcast::Sender<event::PublishEvent>,
-) -> Result<(), EngineError> {
 	Ok(())
 }
 
@@ -429,12 +430,13 @@ fn simulate_move(
 			begin_orientation: 0.0,
 			d_orientation: None,
 		},
-		progress: state::TaskProgress {
+		progress: TaskProgress {
 			finish_time,
-			completion: state::TaskCompletion::DestinationReached {
+			completion: tasks::SimulationEvent::TaskCompleted(CompletedTask {
 				unit_id,
-				simulation_id: Some(simulation_id),
-			},
+				simulation_id: simulation_id,
+				task: model::Task::MoveTo(to.clone()),
+			}),
 		},
 	};
 

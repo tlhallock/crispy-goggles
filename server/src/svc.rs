@@ -104,8 +104,8 @@ impl ShapeEvents for ShapeSvc {
 
 	async fn queue(
 		&self,
-		req: Request<common::grpc::QueueRequest>,
-	) -> Result<Response<common::grpc::QueueResponse>, Status> {
+		req: Request<common::grpc::SetQueueRequest>,
+	) -> Result<Response<common::grpc::SetQueueResponse>, Status> {
 		// Extract player ID from metadata
 		let _player_id = req
 			.metadata()
@@ -124,13 +124,16 @@ impl ShapeEvents for ShapeSvc {
 			.map_err(|_e| {
 				Status::internal("failed to send update intentions request")
 			})?;
-		Ok(Response::new(common::grpc::QueueResponse { valid: true }))
+		Ok(Response::new(common::grpc::SetQueueResponse {
+			valid: true,
+		}))
 	}
 
 	async fn clear_queue(
 		&self,
 		req: Request<common::grpc::ClearQueueRequest>,
 	) -> Result<Response<common::grpc::ClearQueueResponse>, Status> {
+		// TODO: send an empty queue
 		// Extract player ID from metadata
 		let _player_id = req
 			.metadata()
