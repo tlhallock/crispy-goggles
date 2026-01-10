@@ -1,0 +1,4 @@
+Change coords to integrals
+start verifying
+implement collisions
+implement transfers

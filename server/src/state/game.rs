@@ -7,13 +7,10 @@ use crate::state::tasks::SimulationEvent;
 use crate::state::tasks::TaskCompletion;
 use crate::state::tasks::TaskManager;
 use crate::state::tasks::TaskTransition;
-use crate::state::tasks::UnitTasks;
 use crate::state::templates::UnitTemplate;
-use crate::state::types::{SequenceNumber, SimulatedId};
-use common::grpc::Task;
+use crate::state::types::SimulatedId;
 use common::model::OrientedPoint;
 use common::model::{Health, PlayerId, Speed, TaskId, TimeStamp, UnitId};
-use rand::seq;
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
 use tokio::sync::broadcast;
@@ -22,6 +19,8 @@ use common::model;
 use std::collections::HashSet;
 
 use crate::engine::EngineError;
+use crate::engine::EngineErrorKind;
+use crate::engine_error;
 
 // put this in a state mod and limit scope?
 
@@ -91,16 +90,19 @@ impl GameState {
 		if let Some(tp) = self.in_progress.pop() {
 			Ok(tp)
 		} else {
-			Err(EngineError::InternalError)
+			Err(engine_error!(EngineErrorKind::InternalError))
 		}
 	}
 
 	pub fn set_task_queue_requested(
 		&mut self,
 		unit_id: UnitId,
+		time: TimeStamp,
 		tasks: Vec<SimulatedTask>,
 	) -> Result<(), EngineError> {
 		// Todo: this should be updated while looping through the simulated tasks, or remove the locations....
+
+		let current_location = Some(self.get_unit_location(unit_id, time)?);
 
 		let transition = self.tasks.set_task_queue_requested(
 			unit_id,
@@ -108,10 +110,7 @@ impl GameState {
 			self.last_time,
 		)?;
 
-		self.handle_task_transition(unit_id, &transition)?;
-		if let Some((_, next_task_progress)) = transition.to {
-			self.in_progress.push(next_task_progress);
-		}
+		self.handle_task_transition(unit_id, &transition, current_location)?;
 
 		Ok(())
 	}
@@ -213,7 +212,7 @@ impl GameState {
 			let perspective = self
 				.perspectives
 				.get(&player_id)
-				.ok_or(EngineError::InternalError)?;
+				.ok_or(engine_error!(EngineErrorKind::InternalError))?;
 
 			// The tasks shouldn't be in charge of this
 			self.tasks.show_perspective(perspective, &mut updates);
@@ -223,9 +222,11 @@ impl GameState {
 			let perspective = self
 				.perspectives
 				.get_mut(&player_id)
-				.ok_or(EngineError::InternalError)?;
+				.ok_or(engine_error!(EngineErrorKind::InternalError))?;
 			perspective.apply_changes(&updates);
 		}
+
+		updates.send_changes(self, tick_completion_sender)?;
 
 		Ok(())
 	}
@@ -239,7 +240,7 @@ impl GameState {
 
 		let display_type = match self.unit_display_types.get(&unit_id) {
 			Some(dt) => Ok(dt),
-			None => Err(EngineError::InternalError),
+			None => Err(engine_error!(EngineErrorKind::InternalError)),
 		}?;
 		let queue: Option<Vec<model::AnimationSegment>> =
 			match self.locations.get(&unit_id) {
@@ -247,7 +248,7 @@ impl GameState {
 					self.tasks
 						.unit_tasks
 						.get(&unit_id)
-						.ok_or(EngineError::InternalError)?
+						.ok_or(engine_error!(EngineErrorKind::InternalError))?
 						.tasks
 						.iter()
 						.map(|simulation_id| {
@@ -255,7 +256,9 @@ impl GameState {
 								.simulated_tasks
 								.get(simulation_id)
 								.map(|sim| sim.animation.clone())
-								.ok_or(EngineError::InternalError)
+								.ok_or(engine_error!(
+									EngineErrorKind::InternalError
+								))
 						})
 						.collect::<Result<Vec<_>, EngineError>>()?,
 				),
@@ -295,12 +298,12 @@ impl GameState {
 					.tasks
 					.simulated_tasks
 					.get(task_id)
-					.ok_or(EngineError::InternalError)?;
+					.ok_or(engine_error!(EngineErrorKind::InternalError))?;
 				assert!(at_time >= simulated_task.animation.begin_time);
 				assert!(at_time <= simulated_task.progress.finish_time);
 				Ok(simulated_task.animation.place_at(at_time))
 			}
-			None => Err(EngineError::InternalError),
+			None => Err(engine_error!(EngineErrorKind::InternalError)),
 		}
 	}
 
@@ -332,6 +335,7 @@ impl GameState {
 		})
 	}
 
+	// TDO: should accept a wall time..
 	pub fn get_current_time(&self) -> TimeStamp {
 		self.last_time
 	}
@@ -342,7 +346,7 @@ impl GameState {
 	) -> Result<Speed, EngineError> {
 		match self.speeds.get(&unit_id) {
 			Some(speed) => Ok(*speed),
-			_ => Err(EngineError::InternalError),
+			_ => Err(engine_error!(EngineErrorKind::InternalError)),
 		}
 	}
 
@@ -413,7 +417,7 @@ impl GameState {
 			.tasks
 			.simulated_tasks
 			.get(&simulation_id)
-			.ok_or(EngineError::InternalError)?;
+			.ok_or(engine_error!(EngineErrorKind::InternalError))?;
 
 		match &current_simulation.task {
 			model::Task::MoveTo(location) => {
@@ -437,13 +441,13 @@ impl GameState {
 	// 		.tasks
 	// 		.simulated_tasks
 	// 		.get(&simulation_id)
-	// 		.ok_or(EngineError::InternalError)?;
+	// 		.ok_or(engine_error!(EngineErrorKind::InternalError))?;
 
 	// 	let next_simulation = self
 	// 		.tasks
 	// 		.simulated_tasks
 	// 		.get(&next_simulation_id)
-	// 		.ok_or(EngineError::InternalError)?;
+	// 		.ok_or(engine_error!(EngineErrorKind::InternalError))?;
 
 	// 	let next = next_simulation.into();
 
@@ -471,7 +475,7 @@ impl GameState {
 		// tick_completion_sender: &mut broadcast::Sender<event::PublishEvent>,
 	) -> Result<(), EngineError> {
 		let transition = self.tasks.task_completed(game_time, completion)?;
-		self.handle_task_transition(transition.unit_id, &transition)?;
+		self.handle_task_transition(transition.unit_id, &transition, None)?;
 
 		Ok(())
 	}
@@ -510,9 +514,12 @@ impl GameState {
 		&mut self,
 		unit_id: UnitId,
 		transition: &TaskTransition,
+
+		// todo...
+		location: Option<model::OrientedPoint>,
 	) -> Result<(), EngineError> {
 		// update the locations
-		self.locations_transition(unit_id, transition)?;
+		self.locations_transition(unit_id, transition, location)?;
 
 		// update the in-progress tasks
 		if let Some((_, simulation_id, false)) = &transition.from {
@@ -523,7 +530,6 @@ impl GameState {
 		} else {
 			self.clear_upcoming_by_unit(unit_id);
 		}
-
 		Ok(())
 	}
 
@@ -531,6 +537,7 @@ impl GameState {
 		&mut self,
 		unit_id: UnitId,
 		transition: &TaskTransition,
+		location: Option<model::OrientedPoint>,
 	) -> Result<(), EngineError> {
 		// match multiple levels?
 		let next_moving_sim_id =
@@ -549,7 +556,6 @@ impl GameState {
 			self.locations
 				.insert(unit_id, UnitLocation::ByMoveTask(next_moving_sim_id));
 		} else {
-			let last_time = self.last_time;
 			// Shouldn't have to recalculate where it is...
 			let current_location = match &transition.from {
 				Some((model::Task::MoveTo(destination), _, true)) => {
@@ -558,7 +564,8 @@ impl GameState {
 						orientation: 0.0, // TODO: set proper orientation
 					}
 				}
-				_ => self.get_unit_location(unit_id, self.last_time)?,
+				_ => location
+					.ok_or(engine_error!(EngineErrorKind::InternalError))?,
 			};
 
 			// finished moving, now do something else

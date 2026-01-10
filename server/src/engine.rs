@@ -11,7 +11,6 @@ use tokio::sync::mpsc;
 use tokio::time::{Duration, interval};
 
 use crate::event;
-use crate::state;
 use common::model::{self};
 use common::model::{Coord, TimeStamp};
 
@@ -20,21 +19,36 @@ use std::error::Error;
 use std::fmt;
 
 #[derive(Debug)]
-pub enum EngineError {
+pub enum EngineErrorKind {
 	MalformedRequest,
 	UnableToSend,
 	InternalError,
 	InvalidUnitId,
 }
 
+#[derive(Debug)]
+pub struct EngineError {
+	kind: EngineErrorKind,
+	file: &'static str,
+	line: u32,
+}
+
+impl EngineError {
+	pub fn new(kind: EngineErrorKind, file: &'static str, line: u32) -> Self {
+		Self { kind, file, line }
+	}
+}
+
+#[macro_export]
+macro_rules! engine_error {
+	($kind:expr) => {
+		$crate::engine::EngineError::new($kind, file!(), line!())
+	};
+}
+
 impl fmt::Display for EngineError {
 	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-		match self {
-			EngineError::MalformedRequest => write!(f, "Malformed request"),
-			EngineError::UnableToSend => write!(f, "Unable to send message"),
-			EngineError::InternalError => write!(f, "Internal error"),
-			EngineError::InvalidUnitId => write!(f, "Invalid unit ID"),
-		}
+		write!(f, "{:?} at {}:{}", self.kind, self.file, self.line)
 	}
 }
 
@@ -82,7 +96,7 @@ async fn tick(
 				game_time: game_time,
 			},
 		))
-		.map_err(|_e| EngineError::UnableToSend)?;
+		.map_err(|_e| engine_error!(EngineErrorKind::UnableToSend))?;
 
 	Ok(())
 }
@@ -117,7 +131,7 @@ pub async fn run_engine(
 					 &mut tick_completion_sender).await {
 					Ok(_) => {},
 					Err(e) => {
-						eprintln!("Error handling user request: {:?}", e);
+						eprintln!("Error handling user request: {}", e);
 					}
 				}
 			}
@@ -184,10 +198,14 @@ async fn handle_update_intentions(
 		})
 		.collect::<Result<Vec<common::model::Task>, common::convert::ParseError>>(
 		)
-		.map_err(|_| EngineError::MalformedRequest)?;
+		.map_err(|_| engine_error!(EngineErrorKind::MalformedRequest))?;
 
 	let simulated = simulate_tasks(game_state, request.unit_id, tasks)?;
-	game_state.set_task_queue_requested(request.unit_id, simulated)?;
+	game_state.set_task_queue_requested(
+		request.unit_id,
+		game_state.get_current_time(),
+		simulated,
+	)?;
 
 	// TODO: move to the tick loop? (sequence number?)
 	// tick_completion_sender
@@ -276,7 +294,11 @@ async fn handle_user_request(
 				.await?
 		}
 		event::PlayerRequest::ClearQueue(unit_id) => {
-			game_state.set_task_queue_requested(unit_id, vec![])?;
+			game_state.set_task_queue_requested(
+				unit_id,
+				game_state.get_current_time(),
+				vec![],
+			)?;
 			tick_completion_sender
 				.send(event::PublishEvent::TasksUpdated(
 					event::TasksUpdatedEvent {
@@ -284,7 +306,7 @@ async fn handle_user_request(
 						tasks: vec![],
 					},
 				))
-				.map_err(|_| EngineError::UnableToSend)?;
+				.map_err(|_| engine_error!(EngineErrorKind::UnableToSend))?;
 		}
 	}
 
@@ -393,6 +415,7 @@ fn spawn_ticker(
 	});
 }
 
+// Also pass to the state...
 struct SimScratchPad {
 	current_time: TimeStamp,
 	current_location: model::OrientedPoint,
@@ -408,11 +431,11 @@ fn simulate_move(
 ) -> Result<SimulatedTask, EngineError> {
 	let speed = game_state.get_unit_speed(unit_id)?;
 	if speed < 1e-6 as Coord {
-		return Err(EngineError::MalformedRequest);
+		return Err(engine_error!(EngineErrorKind::MalformedRequest));
 	}
 	let dist = scratch_pad.current_location.point.distance_to(&to);
 	if dist < 1e-6 {
-		return Err(EngineError::MalformedRequest);
+		return Err(engine_error!(EngineErrorKind::MalformedRequest));
 	}
 	let duration = dist / speed as f64;
 	let delta = model::Delta::between(&scratch_pad.current_location.point, &to)
@@ -461,7 +484,7 @@ fn simulate_task(
 		model::Task::MoveTo(to) => {
 			simulate_move(game_state, unit_id, t, scratch_pad, to)
 		}
-		_ => Err(EngineError::MalformedRequest),
+		_ => Err(engine_error!(EngineErrorKind::MalformedRequest)),
 	}
 }
 
@@ -470,6 +493,7 @@ fn simulate_tasks(
 	unit_id: model::UnitId,
 	tasks: Vec<model::Task>,
 ) -> Result<Vec<SimulatedTask>, EngineError> {
+	// TODO: skip things in the past
 	let begin_time = game_state.get_current_time();
 	let mut scratch_pad = SimScratchPad {
 		current_time: begin_time,

@@ -1,21 +1,12 @@
 use crate::event;
-use crate::state::perspective;
-use crate::state::tasks::SimulatedTask;
-use crate::state::tasks::TaskCompletion;
-use crate::state::tasks::TaskManager;
-use crate::state::tasks::UnitTasks;
-use crate::state::templates::UnitTemplate;
-use crate::state::types::{SequenceNumber, SimulatedId};
-use common::model::OrientedPoint;
-use common::model::{Health, PlayerId, Speed, TaskId, TimeStamp, UnitId};
-use std::collections::BinaryHeap;
+use crate::state::types::SequenceNumber;
+use common::model::{PlayerId, UnitId};
 use std::collections::HashMap;
 use tokio::sync::broadcast;
 
-use common::model;
-use std::collections::HashSet;
-
 use crate::engine::EngineError;
+use crate::engine::EngineErrorKind;
+use crate::engine_error;
 
 #[derive(Default, Debug)]
 pub struct PlayersGamePerspective {
@@ -73,8 +64,8 @@ impl PerspectiveUpdates {
 	}
 	pub fn send_changes(
 		&self,
-		tick_completion_sender: &broadcast::Sender<event::PublishEvent>,
 		game: &crate::state::game::GameState,
+		tick_completion_sender: &broadcast::Sender<event::PublishEvent>,
 	) -> Result<(), EngineError> {
 		for (unit_id, _, is_new) in self.units_to_upsert.iter() {
 			if *is_new {
@@ -89,7 +80,9 @@ impl PerspectiveUpdates {
 						.send(crate::event::PublishEvent::UnitCreated(
 							animatable,
 						))
-						.map_err(|_e| EngineError::UnableToSend)?;
+						.map_err(|_e| {
+							engine_error!(EngineErrorKind::UnableToSend)
+						})?;
 				} else {
 					println!(
 						"Player {}: no animatable for unit {}",
@@ -114,7 +107,9 @@ impl PerspectiveUpdates {
 									.collect(),
 							},
 						))
-						.map_err(|_e| EngineError::UnableToSend)?;
+						.map_err(|_e| {
+							engine_error!(EngineErrorKind::UnableToSend)
+						})?;
 				} else {
 					println!(
 						"Player {}: no animatable for unit {}",

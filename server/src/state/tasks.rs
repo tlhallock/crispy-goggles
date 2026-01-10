@@ -1,6 +1,7 @@
 use crate::engine::EngineError;
+use crate::engine::EngineErrorKind;
+use crate::engine_error;
 use crate::state::game::TaskProgress;
-use crate::state::templates::UnitTemplate;
 use crate::state::types::{SequenceNumber, SimulatedId};
 use common::model::TimeStamp;
 use common::model::UnitId;
@@ -85,12 +86,12 @@ impl TaskManager {
 	// 	let unit_tasks = self
 	// 		.unit_tasks
 	// 		.get(&unit_id)
-	// 		.ok_or(EngineError::InvalidUnitId)?;
+	// 		.ok_or(engine_error!(EngineErrorKind::InvalidUnitId))?;
 	// 	if let Some(current_sim_id) = unit_tasks.current_simulation_id {
 	// 		let simulated_task = self
 	// 			.simulated_tasks
 	// 			.get(&current_sim_id)
-	// 			.ok_or(EngineError::InternalError)?;
+	// 			.ok_or(engine_error!(EngineErrorKind::InternalError))?;
 	// 		Ok(Some(simulated_task.task.clone()))
 	// 	} else {
 	// 		Ok(None)
@@ -106,14 +107,14 @@ impl TaskManager {
 		let unit_tasks = self
 			.unit_tasks
 			.get_mut(&unit_id)
-			.ok_or(EngineError::InvalidUnitId)?;
+			.ok_or(engine_error!(EngineErrorKind::InvalidUnitId))?;
 
 		let current_task =
 			if let Some(current_sim_id) = unit_tasks.current_simulation_id {
 				let simulated_task = self
 					.simulated_tasks
 					.get(&current_sim_id)
-					.ok_or(EngineError::InternalError)?;
+					.ok_or(engine_error!(EngineErrorKind::InternalError))?;
 				Some((simulated_task.task.clone(), current_sim_id, false))
 			} else {
 				None
@@ -131,6 +132,8 @@ impl TaskManager {
 		if let Some(task) = &simulated_tasks.first() {
 			unit_tasks.current_simulation_id = Some(task.id);
 			next_task = Some((task.task.clone(), task.progress.clone()));
+		} else {
+			unit_tasks.current_simulation_id = None;
 		}
 		unit_tasks.tasks.clear();
 		unit_tasks
@@ -160,14 +163,14 @@ impl TaskManager {
 	// 	let unit_tasks = self
 	// 		.unit_tasks
 	// 		.get_mut(&unit_id)
-	// 		.ok_or(EngineError::InvalidUnitId)?;
+	// 		.ok_or(engine_error!(EngineErrorKind::InvalidUnitId))?;
 
 	// 	let current_task =
 	// 		if let Some(current_sim_id) = unit_tasks.current_simulation_id {
 	// 			let simulated_task = self
 	// 				.simulated_tasks
 	// 				.get(&current_sim_id)
-	// 				.ok_or(EngineError::InternalError)?;
+	// 				.ok_or(engine_error!(EngineErrorKind::InternalError))?;
 	// 			Some(simulated_task.task.clone())
 	// 		} else {
 	// 			None
@@ -199,7 +202,7 @@ impl TaskManager {
 		let unit_tasks = self
 			.unit_tasks
 			.get_mut(&completion.unit_id)
-			.ok_or(EngineError::InvalidUnitId)?;
+			.ok_or(engine_error!(EngineErrorKind::InvalidUnitId))?;
 
 		assert!(
 			unit_tasks.current_simulation_id == Some(completion.simulation_id),
@@ -215,7 +218,7 @@ impl TaskManager {
 			let simulated_task = self
 				.simulated_tasks
 				.remove(&completion.simulation_id)
-				.ok_or(EngineError::InternalError)?;
+				.ok_or(engine_error!(EngineErrorKind::InternalError))?;
 
 			assert!(
 				simulated_task.task == completion.task,
@@ -229,12 +232,17 @@ impl TaskManager {
 			let simulated_task = self
 				.simulated_tasks
 				.get(next_sim_id)
-				.ok_or(EngineError::InternalError)?;
+				.ok_or(engine_error!(EngineErrorKind::InternalError))?;
 			Some((simulated_task.task.clone(), simulated_task.progress.clone()))
 		} else {
 			unit_tasks.current_simulation_id = None;
 			None
 		};
+
+		if unit_tasks.tasks.is_empty() {
+			// notify of idle..
+			unit_tasks.sequence_number += 1;
+		}
 
 		Ok(TaskTransition {
 			unit_id: completion.unit_id,
@@ -251,7 +259,7 @@ impl TaskManager {
 		let unit_tasks = self
 			.unit_tasks
 			.get(&unit_id)
-			.ok_or(EngineError::InvalidUnitId)?;
+			.ok_or(engine_error!(EngineErrorKind::InvalidUnitId))?;
 		Ok(unit_tasks.sequence_number)
 	}
 
